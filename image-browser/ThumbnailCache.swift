@@ -8,24 +8,44 @@ import ImageIO
 actor ThumbnailCache {
     static let shared = ThumbnailCache()
 
-    private let memory: NSCache<NSString, NSImage> = {
+    /// Requested sizes are quantized to these point-size buckets so a moving
+    /// zoom slider doesn't generate dozens of variants per image.
+    static let buckets: [CGFloat] = [128, 256, 512, 1024, 2048]
+
+    nonisolated static func bucket(for pointSize: CGFloat) -> CGFloat {
+        buckets.first { $0 >= pointSize } ?? buckets[buckets.count - 1]
+    }
+
+    /// Grid thumbnails (buckets ≤ 512).
+    private let thumbs: NSCache<NSString, NSImage> = {
         let c = NSCache<NSString, NSImage>()
-        c.countLimit = 2000
-        c.totalCostLimit = 256 * 1024 * 1024 // ~256 MB
+        c.countLimit = 4000
+        c.totalCostLimit = 192 * 1024 * 1024
+        return c
+    }()
+
+    /// Large previews (1024/2048), kept apart so they don't evict grid thumbnails.
+    private let previews: NSCache<NSString, NSImage> = {
+        let c = NSCache<NSString, NSImage>()
+        c.countLimit = 48
+        c.totalCostLimit = 512 * 1024 * 1024
         return c
     }()
 
     func thumbnail(for url: URL, pixelSize: CGFloat, scale: CGFloat) async -> NSImage? {
-        let key = "\(url.path)|\(Int(pixelSize))|\(Int(scale))" as NSString
-        if let cached = memory.object(forKey: key) { return cached }
+        let bucket = Self.bucket(for: pixelSize)
+        let cache = bucket > 512 ? previews : thumbs
+        let key = "\(url.path)|\(Int(bucket))|\(Int(scale))" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        if Task.isCancelled { return nil }
 
-        if let img = await Self.quickLook(url: url, pixelSize: pixelSize, scale: scale)
-            ?? Self.imageIO(url: url, pixelSize: pixelSize * scale)
-        {
-            memory.setObject(img, forKey: key, cost: Self.cost(of: img))
-            return img
+        var generated = await Self.quickLook(url: url, pixelSize: bucket, scale: scale)
+        if generated == nil {
+            generated = await Self.imageIOOffActor(url: url, pixelSize: bucket * scale)
         }
-        return nil
+        guard let img = generated else { return nil }
+        cache.setObject(img, forKey: key, cost: Self.cost(of: img))
+        return img
     }
 
     private static func quickLook(url: URL, pixelSize: CGFloat, scale: CGFloat) async -> NSImage? {
@@ -35,14 +55,32 @@ actor ThumbnailCache {
             scale: scale,
             representationTypes: .thumbnail
         )
-        return await withCheckedContinuation { cont in
-            QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
-                cont.resume(returning: rep?.nsImage)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { cont in
+                QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
+                    cont.resume(returning: rep?.nsImage)
+                }
             }
+        } onCancel: {
+            QLThumbnailGenerator.shared.cancel(request)
+        }
+    }
+
+    /// Runs the ImageIO decode on the global pool so it neither blocks the
+    /// actor (serializing all lookups) nor ignores caller cancellation.
+    private static func imageIOOffActor(url: URL, pixelSize: CGFloat) async -> NSImage? {
+        let task = Task.detached(priority: .userInitiated) {
+            imageIO(url: url, pixelSize: pixelSize)
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 
     private static func imageIO(url: URL, pixelSize: CGFloat) -> NSImage? {
+        if Task.isCancelled { return nil }
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,

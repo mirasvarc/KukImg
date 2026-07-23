@@ -16,12 +16,13 @@ struct ContentView: View {
             }
             .navigationTitle(model.folder?.lastPathComponent ?? "Image Browser")
             .toolbar { toolbar }
+            .searchable(text: $model.filterText, placement: .toolbar, prompt: "Filter by name")
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 StatusBar(item: model.currentItem)
             }
             .dropDestination(for: URL.self) { urls, _ in
                 guard let url = urls.first else { return false }
-                model.handleDroppedFolder(url)
+                model.handleDrop(url)
                 return true
             }
 
@@ -43,19 +44,16 @@ struct ContentView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                ForEach(SortOrder.allCases, id: \.self) { order in
-                    Button {
-                        model.sortOrder = order
-                    } label: {
-                        if model.sortOrder == order {
-                            Label(order.label, systemImage: "checkmark")
-                        } else {
-                            Text(order.label)
-                        }
+                Picker("Sort By", selection: sortBinding) {
+                    ForEach(SortOrder.allCases, id: \.self) { order in
+                        Text(order.label).tag(order)
                     }
                 }
+                .pickerStyle(.inline)
+                Divider()
+                Toggle("Include Subfolders", isOn: subfoldersBinding)
             } label: {
-                Label("Sort", systemImage: "arrow.up.arrow.down")
+                Label("View", systemImage: "arrow.up.arrow.down")
             }
         }
         ToolbarItem(placement: .primaryAction) {
@@ -75,50 +73,93 @@ struct ContentView: View {
             .disabled(model.currentItem == nil)
         }
         ToolbarItem(placement: .primaryAction) {
-            Slider(value: .init(get: { thumbSize }, set: { thumbSize = $0 }), in: 80...320)
+            Slider(value: $thumbSize, in: 80...320)
                 .frame(width: 140)
+                .help("Thumbnail size")
         }
     }
 
+    private var sortBinding: Binding<SortOrder> {
+        Binding(get: { model.sortOrder }, set: { model.sortOrder = $0 })
+    }
+
+    private var subfoldersBinding: Binding<Bool> {
+        Binding(get: { model.includeSubfolders }, set: { model.includeSubfolders = $0 })
+    }
+
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        List {
             if let folder = model.folder {
-                Label(folder.lastPathComponent, systemImage: "folder.fill")
-                    .padding(.horizontal)
-                Text("\(model.items.count) images")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-            } else {
+                Section("Current") {
+                    Label(folder.lastPathComponent, systemImage: "folder.fill")
+                    Text(countLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if !model.recents.isEmpty {
+                Section("Recent") {
+                    ForEach(model.recents) { recent in
+                        Button {
+                            model.openRecent(recent)
+                        } label: {
+                            Label(recent.name, systemImage: "clock")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .buttonStyle(.plain)
+                        .help(recent.path)
+                        .foregroundStyle(
+                            recent.path == model.folder?.path ? Color.accentColor : .primary
+                        )
+                    }
+                }
+            }
+            if model.folder == nil && model.recents.isEmpty {
                 ContentUnavailableView(
                     "No Folder",
                     systemImage: "photo.on.rectangle",
                     description: Text("Open a folder, drop one onto the window, or pick from File → Open Recent.")
                 )
             }
-            Spacer()
         }
-        .padding(.top)
+        .listStyle(.sidebar)
         .frame(minWidth: 180)
+    }
+
+    private var countLabel: String {
+        if model.visibleItems.count == model.items.count {
+            "\(model.items.count) images"
+        } else {
+            "\(model.visibleItems.count) of \(model.items.count) images"
+        }
     }
 
     private var grid: some View {
         Group {
             if model.isLoading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.items.isEmpty {
+            } else if model.visibleItems.isEmpty {
                 ContentUnavailableView(
                     "No Images",
                     systemImage: "photo",
-                    description: Text(model.folder == nil
-                                      ? "Choose a folder via ⌘O or drop one here."
-                                      : "This folder has no images.")
+                    description: Text(emptyDescription)
                 )
             } else {
                 ImageGridView(thumbSize: thumbSize)
             }
         }
         .frame(minWidth: 400)
+    }
+
+    private var emptyDescription: String {
+        if model.folder == nil {
+            "Choose a folder via ⌘O or drop one here."
+        } else if !model.filterText.isEmpty {
+            "No images match “\(model.filterText)”."
+        } else {
+            "This folder has no images."
+        }
     }
 
     private var detail: some View {

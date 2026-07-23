@@ -45,25 +45,13 @@ struct FullscreenView: View {
                 Spacer()
 
                 HStack {
-                    Text(item.name)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.4), in: Capsule())
+                    chromeLabel { Text(item.name) }
                     if isPlaying {
-                        Label("Slideshow", systemImage: "play.fill")
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(.black.opacity(0.4), in: Capsule())
+                        chromeLabel { Label("Slideshow", systemImage: "play.fill") }
                     }
                     Spacer()
                     if let idx = model.currentIndex {
-                        Text("\(idx + 1) / \(model.items.count)")
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(.black.opacity(0.4), in: Capsule())
+                        chromeLabel { Text("\(idx + 1) / \(model.visibleItems.count)") }
                     }
                 }
                 .padding()
@@ -81,21 +69,29 @@ struct FullscreenView: View {
         .onHover { hovering = $0 }
         .onKeyPress(.leftArrow)  { model.move(by: -1); return .handled }
         .onKeyPress(.rightArrow) { model.move(by:  1); return .handled }
+        .onKeyPress(.upArrow)    { model.move(by: -1); return .handled }
+        .onKeyPress(.downArrow)  { model.move(by:  1); return .handled }
+        .onKeyPress(.home)       { model.selectFirst(); return .handled }
+        .onKeyPress(.end)        { model.selectLast();  return .handled }
         .onKeyPress(.escape)     { model.isFullscreen = false; return .handled }
         .onKeyPress(.return)     { model.isFullscreen = false; return .handled }
         .onKeyPress(.space)      { toggleSlideshow(); return .handled }
         .onKeyPress("p")         { toggleSlideshow(); return .handled }
+        .onKeyPress(.delete)     { model.deleteCurrent(); return .handled }
         .task(id: item.id) {
             fullImage = nil
             preview = await ThumbnailCache.shared.thumbnail(
                 for: item.url, pixelSize: 2048, scale: scale
             )
-            let url = item.url
-            let img = await Task.detached(priority: .userInitiated) {
-                FullImageLoader.load(url: url)
-            }.value
-            if !Task.isCancelled { fullImage = img }
+            let img = await FullImageCache.shared.image(for: item.url)
+            if !Task.isCancelled, let img { fullImage = img }
             model.prefetchNeighbors(thumbSize: 256, scale: scale)
+
+            // Warm the next full image so arrow keys and the slideshow are instant.
+            if let idx = model.currentIndex, idx + 1 < model.visibleItems.count {
+                let next = model.visibleItems[idx + 1].url
+                _ = await FullImageCache.shared.image(for: next)
+            }
         }
     }
 
@@ -105,9 +101,17 @@ struct FullscreenView: View {
                 .font(.title3)
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
-                .background(.black.opacity(0.4), in: Circle())
         }
         .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .circle)
+    }
+
+    private func chromeLabel<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .glassEffect(.regular, in: .capsule)
     }
 
     private func toggleSlideshow() {
@@ -116,15 +120,17 @@ struct FullscreenView: View {
 
     private func startSlideshow() {
         isPlaying = true
+        NSCursor.setHiddenUntilMouseMoves(true)
         slideshowTask?.cancel()
         slideshowTask = Task { @MainActor [weak model = model] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(interval))
                 if Task.isCancelled { break }
                 guard let model else { break }
-                if let idx = model.currentIndex, idx >= model.items.count - 1 {
+                if let idx = model.currentIndex, idx >= model.visibleItems.count - 1 {
                     break
                 }
+                NSCursor.setHiddenUntilMouseMoves(true)
                 model.move(by: 1)
             }
             self.isPlaying = false

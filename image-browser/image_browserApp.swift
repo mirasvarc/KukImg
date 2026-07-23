@@ -52,6 +52,11 @@ struct image_browserApp: App {
                         }
                     }
                 }
+                Divider()
+                Toggle("Include Subfolders", isOn: Binding(
+                    get: { model.includeSubfolders },
+                    set: { model.includeSubfolders = $0 }
+                ))
             }
         }
     }

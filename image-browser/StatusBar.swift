@@ -31,9 +31,7 @@ struct StatusBar: View {
         .overlay(alignment: .top) { Divider() }
         .task(id: item?.id) {
             guard let url = item?.url else { meta = nil; return }
-            self.meta = await Task.detached(priority: .userInitiated) {
-                MetadataReader.read(url: url)
-            }.value
+            self.meta = await MetadataCache.shared.metadata(for: url)
         }
     }
 }

@@ -5,25 +5,30 @@ struct ImageGridView: View {
     let thumbSize: CGFloat
 
     @State private var containerWidth: CGFloat = 0
+    @State private var visibleRect: CGRect = .zero
+    @State private var lastScroll = Date.distantPast
     @FocusState private var focused: Bool
     @Environment(\.displayScale) private var scale
 
+    private let spacing: CGFloat = 8
+    private let padding: CGFloat = 8
+
+    /// Explicit column count shared by layout AND arrow-key navigation, so
+    /// up/down always moves exactly one visual row.
     private var columnCount: Int {
-        let spacing: CGFloat = 8
-        let padding: CGFloat = 16
-        let usable = max(0, containerWidth - padding + spacing)
+        let usable = max(0, containerWidth - padding * 2 + spacing)
         return max(1, Int(usable / (thumbSize + spacing)))
     }
 
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: spacing), count: columnCount)
+    }
+
     var body: some View {
-        @Bindable var model = model
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: thumbSize), spacing: 8)],
-                    spacing: 8
-                ) {
-                    ForEach(model.items) { item in
+                LazyVGrid(columns: columns, spacing: spacing) {
+                    ForEach(model.visibleItems) { item in
                         ThumbnailCell(
                             item: item,
                             size: thumbSize,
@@ -39,19 +44,27 @@ struct ImageGridView: View {
                             focused = true
                         }
                         .contextMenu {
-                            Button("Open") {
+                            Button {
                                 model.selection = item.id
                                 model.isFullscreen = true
+                            } label: {
+                                Label("Open", systemImage: "arrow.up.left.and.arrow.down.right")
                             }
                             Divider()
-                            Button("Show in Finder") { model.reveal(item) }
-                            Button("Copy") { model.copy(item) }
+                            Button { model.reveal(item) } label: {
+                                Label("Show in Finder", systemImage: "folder")
+                            }
+                            Button { model.copy(item) } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
                             Divider()
-                            Button("Move to Trash") { model.delete(item) }
+                            Button(role: .destructive) { model.delete(item) } label: {
+                                Label("Move to Trash", systemImage: "trash")
+                            }
                         }
                     }
                 }
-                .padding(8)
+                .padding(padding)
             }
             .focusable()
             .focusEffectDisabled()
@@ -73,14 +86,37 @@ struct ImageGridView: View {
             }
             .onChange(of: model.selection) { _, new in
                 guard let new else { return }
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    proxy.scrollTo(new, anchor: .center)
-                }
+                ensureVisible(new, proxy: proxy)
                 model.prefetchNeighbors(thumbSize: thumbSize, scale: scale)
+            }
+            .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, new in
+                visibleRect = new
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
                 containerWidth = $0
             }
+        }
+    }
+
+    /// Scrolls only when the selected cell is outside the viewport, and skips
+    /// the animation while an arrow key is held down (rapid successive moves).
+    private func ensureVisible(_ id: ImageItem.ID, proxy: ScrollViewProxy) {
+        guard let idx = model.visibleItems.firstIndex(where: { $0.id == id }) else { return }
+        let row = idx / columnCount
+        let rowHeight = thumbSize + spacing
+        let minY = padding + CGFloat(row) * rowHeight
+        let maxY = minY + thumbSize
+
+        if visibleRect.height > 0, minY >= visibleRect.minY, maxY <= visibleRect.maxY {
+            return
+        }
+        let now = Date()
+        let animate = now.timeIntervalSince(lastScroll) > 0.25
+        lastScroll = now
+        if animate {
+            withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(id) }
+        } else {
+            proxy.scrollTo(id)
         }
     }
 }
@@ -91,7 +127,10 @@ struct ThumbnailCell: View {
     let selected: Bool
 
     @State private var image: NSImage?
+    @State private var hovering = false
     @Environment(\.displayScale) private var scale
+
+    private var bucket: CGFloat { ThumbnailCache.bucket(for: size) }
 
     var body: some View {
         ZStack {
@@ -102,7 +141,7 @@ struct ThumbnailCell: View {
                     .resizable()
                     .interpolation(.medium)
                     .scaledToFit()
-                    .padding(2)
+                    .padding(3)
             } else {
                 ProgressView().controlSize(.small)
             }
@@ -110,12 +149,21 @@ struct ThumbnailCell: View {
         .frame(width: size, height: size)
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(selected ? Color.accentColor : .clear, lineWidth: 3)
+                .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 3)
         )
-        .task(id: item.id) {
-            self.image = await ThumbnailCache.shared.thumbnail(
-                for: item.url, pixelSize: size, scale: scale
-            )
+        .scaleEffect(hovering ? 1.03 : 1)
+        .brightness(hovering && !selected ? 0.05 : 0)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .onHover { hovering = $0 }
+        .help(item.name)
+        // Keyed on the bucket too: moving the size slider re-fetches a sharper
+        // version while the old image stays visible (no flash back to spinner).
+        .task(id: "\(item.url.path)|\(bucket)") {
+            if let img = await ThumbnailCache.shared.thumbnail(
+                for: item.url, pixelSize: bucket, scale: scale
+            ) {
+                image = img
+            }
         }
     }
 }

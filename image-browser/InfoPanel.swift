@@ -53,10 +53,7 @@ struct InfoPanel: View {
         .frame(width: 240)
         .background(.regularMaterial)
         .task(id: item.id) {
-            let url = item.url
-            self.meta = await Task.detached(priority: .userInitiated) {
-                MetadataReader.read(url: url)
-            }.value
+            self.meta = await MetadataCache.shared.metadata(for: item.url)
         }
     }
 
