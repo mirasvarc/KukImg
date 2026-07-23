@@ -1,0 +1,39 @@
+import SwiftUI
+
+struct StatusBar: View {
+    let item: ImageItem?
+    @State private var meta: ImageMetadata?
+
+    var body: some View {
+        HStack(spacing: 16) {
+            if let item {
+                Text(item.name).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                if let w = meta?.pixelWidth, let h = meta?.pixelHeight {
+                    Text("\(w) × \(h)")
+                }
+                if let mp = meta?.megapixels {
+                    Text(String(format: "%.1f MP", mp))
+                }
+                if let size = meta?.fileSize {
+                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                }
+            } else {
+                Text(" ")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+        .task(id: item?.id) {
+            guard let url = item?.url else { meta = nil; return }
+            self.meta = await Task.detached(priority: .userInitiated) {
+                MetadataReader.read(url: url)
+            }.value
+        }
+    }
+}
