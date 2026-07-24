@@ -5,5 +5,13 @@
         <link>https://github.com/mirasvarc/KukImg</link>
         <description>Most recent updates to Kuk</description>
         <language>en</language>
+        <item>
+            <title>Version 1.1.0</title>
+            <pubDate>Fri, 24 Jul 2026 17:08:56 +0200</pubDate>
+            <sparkle:version>1.1.0</sparkle:version>
+            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/mirasvarc/KukImg/releases/download/v1.1.0/Kuk-v1.1.0.zip" sparkle:edSignature="zHnR76UdIQtWcH14xZ1/R13snwtf+7pwBSCQYc8nv4g64WqR/GmKVKlDwQzHH/l5zoLCAtiqF4BiXUSTBvM1BA==" length="1337942" type="application/octet-stream"/>
+        </item>
     </channel>
 </rss>
