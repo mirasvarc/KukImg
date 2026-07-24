@@ -14,7 +14,7 @@ struct ContentView: View {
             } detail: {
                 detail
             }
-            .navigationTitle(model.folder?.lastPathComponent ?? "Image Browser")
+            .navigationTitle(model.folder?.lastPathComponent ?? "Kuk")
             .toolbar { toolbar }
             .searchable(text: $model.filterText, placement: .toolbar, prompt: "Filter by name")
             .safeAreaInset(edge: .bottom, spacing: 0) {

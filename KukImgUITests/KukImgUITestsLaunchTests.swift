@@ -1,13 +1,13 @@
 //
-//  image_browserUITestsLaunchTests.swift
-//  image-browserUITests
+//  KukImgUITestsLaunchTests.swift
+//  KukImgUITests
 //
 //  Created by Miroslav Švarc on 03.05.2026.
 //
 
 import XCTest
 
-final class image_browserUITestsLaunchTests: XCTestCase {
+final class KukImgUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

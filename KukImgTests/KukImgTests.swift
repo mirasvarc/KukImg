@@ -1,14 +1,14 @@
 //
-//  image_browserTests.swift
-//  image-browserTests
+//  KukImgTests.swift
+//  KukImgTests
 //
 //  Created by Miroslav Švarc on 03.05.2026.
 //
 
 import Testing
-@testable import image_browser
+@testable import Kuk
 
-struct image_browserTests {
+struct KukImgTests {
 
     @Test func example() async throws {
         // Write your test here and use APIs like `#expect(...)` to check expected conditions.

@@ -12,37 +12,37 @@
 			containerPortal = C83AF4C82FA752A400D21349 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = C83AF4CF2FA752A400D21349;
-			remoteInfo = "image-browser";
+			remoteInfo = "KukImg";
 		};
 		C83AF4EA2FA752A500D21349 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = C83AF4C82FA752A400D21349 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = C83AF4CF2FA752A400D21349;
-			remoteInfo = "image-browser";
+			remoteInfo = "KukImg";
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		C83AF4D02FA752A400D21349 /* image-browser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "image-browser.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		C83AF4DF2FA752A500D21349 /* image-browserTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "image-browserTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
-		C83AF4E92FA752A500D21349 /* image-browserUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "image-browserUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C83AF4D02FA752A400D21349 /* Kuk.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Kuk.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C83AF4DF2FA752A500D21349 /* KukImgTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "KukImgTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C83AF4E92FA752A500D21349 /* KukImgUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "KukImgUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		C83AF4D22FA752A400D21349 /* image-browser */ = {
+		C83AF4D22FA752A400D21349 /* KukImg */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "image-browser";
+			path = "KukImg";
 			sourceTree = "<group>";
 		};
-		C83AF4E22FA752A500D21349 /* image-browserTests */ = {
+		C83AF4E22FA752A500D21349 /* KukImgTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "image-browserTests";
+			path = "KukImgTests";
 			sourceTree = "<group>";
 		};
-		C83AF4EC2FA752A500D21349 /* image-browserUITests */ = {
+		C83AF4EC2FA752A500D21349 /* KukImgUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "image-browserUITests";
+			path = "KukImgUITests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -75,9 +75,9 @@
 		C83AF4C72FA752A400D21349 = {
 			isa = PBXGroup;
 			children = (
-				C83AF4D22FA752A400D21349 /* image-browser */,
-				C83AF4E22FA752A500D21349 /* image-browserTests */,
-				C83AF4EC2FA752A500D21349 /* image-browserUITests */,
+				C83AF4D22FA752A400D21349 /* KukImg */,
+				C83AF4E22FA752A500D21349 /* KukImgTests */,
+				C83AF4EC2FA752A500D21349 /* KukImgUITests */,
 				C83AF4D12FA752A400D21349 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -85,9 +85,9 @@
 		C83AF4D12FA752A400D21349 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C83AF4D02FA752A400D21349 /* image-browser.app */,
-				C83AF4DF2FA752A500D21349 /* image-browserTests.xctest */,
-				C83AF4E92FA752A500D21349 /* image-browserUITests.xctest */,
+				C83AF4D02FA752A400D21349 /* Kuk.app */,
+				C83AF4DF2FA752A500D21349 /* KukImgTests.xctest */,
+				C83AF4E92FA752A500D21349 /* KukImgUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -95,9 +95,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		C83AF4CF2FA752A400D21349 /* image-browser */ = {
+		C83AF4CF2FA752A400D21349 /* KukImg */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C83AF4F32FA752A500D21349 /* Build configuration list for PBXNativeTarget "image-browser" */;
+			buildConfigurationList = C83AF4F32FA752A500D21349 /* Build configuration list for PBXNativeTarget "KukImg" */;
 			buildPhases = (
 				C83AF4CC2FA752A400D21349 /* Sources */,
 				C83AF4CD2FA752A400D21349 /* Frameworks */,
@@ -108,18 +108,18 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				C83AF4D22FA752A400D21349 /* image-browser */,
+				C83AF4D22FA752A400D21349 /* KukImg */,
 			);
-			name = "image-browser";
+			name = "KukImg";
 			packageProductDependencies = (
 			);
-			productName = "image-browser";
-			productReference = C83AF4D02FA752A400D21349 /* image-browser.app */;
+			productName = "KukImg";
+			productReference = C83AF4D02FA752A400D21349 /* Kuk.app */;
 			productType = "com.apple.product-type.application";
 		};
-		C83AF4DE2FA752A500D21349 /* image-browserTests */ = {
+		C83AF4DE2FA752A500D21349 /* KukImgTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C83AF4F62FA752A500D21349 /* Build configuration list for PBXNativeTarget "image-browserTests" */;
+			buildConfigurationList = C83AF4F62FA752A500D21349 /* Build configuration list for PBXNativeTarget "KukImgTests" */;
 			buildPhases = (
 				C83AF4DB2FA752A500D21349 /* Sources */,
 				C83AF4DC2FA752A500D21349 /* Frameworks */,
@@ -131,18 +131,18 @@
 				C83AF4E12FA752A500D21349 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				C83AF4E22FA752A500D21349 /* image-browserTests */,
+				C83AF4E22FA752A500D21349 /* KukImgTests */,
 			);
-			name = "image-browserTests";
+			name = "KukImgTests";
 			packageProductDependencies = (
 			);
-			productName = "image-browserTests";
-			productReference = C83AF4DF2FA752A500D21349 /* image-browserTests.xctest */;
+			productName = "KukImgTests";
+			productReference = C83AF4DF2FA752A500D21349 /* KukImgTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		C83AF4E82FA752A500D21349 /* image-browserUITests */ = {
+		C83AF4E82FA752A500D21349 /* KukImgUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C83AF4F92FA752A500D21349 /* Build configuration list for PBXNativeTarget "image-browserUITests" */;
+			buildConfigurationList = C83AF4F92FA752A500D21349 /* Build configuration list for PBXNativeTarget "KukImgUITests" */;
 			buildPhases = (
 				C83AF4E52FA752A500D21349 /* Sources */,
 				C83AF4E62FA752A500D21349 /* Frameworks */,
@@ -154,13 +154,13 @@
 				C83AF4EB2FA752A500D21349 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				C83AF4EC2FA752A500D21349 /* image-browserUITests */,
+				C83AF4EC2FA752A500D21349 /* KukImgUITests */,
 			);
-			name = "image-browserUITests";
+			name = "KukImgUITests";
 			packageProductDependencies = (
 			);
-			productName = "image-browserUITests";
-			productReference = C83AF4E92FA752A500D21349 /* image-browserUITests.xctest */;
+			productName = "KukImgUITests";
+			productReference = C83AF4E92FA752A500D21349 /* KukImgUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -186,7 +186,7 @@
 					};
 				};
 			};
-			buildConfigurationList = C83AF4CB2FA752A400D21349 /* Build configuration list for PBXProject "image-browser" */;
+			buildConfigurationList = C83AF4CB2FA752A400D21349 /* Build configuration list for PBXProject "KukImg" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -200,9 +200,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C83AF4CF2FA752A400D21349 /* image-browser */,
-				C83AF4DE2FA752A500D21349 /* image-browserTests */,
-				C83AF4E82FA752A500D21349 /* image-browserUITests */,
+				C83AF4CF2FA752A400D21349 /* KukImg */,
+				C83AF4DE2FA752A500D21349 /* KukImgTests */,
+				C83AF4E82FA752A500D21349 /* KukImgUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -258,12 +258,12 @@
 /* Begin PBXTargetDependency section */
 		C83AF4E12FA752A500D21349 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = C83AF4CF2FA752A400D21349 /* image-browser */;
+			target = C83AF4CF2FA752A400D21349 /* KukImg */;
 			targetProxy = C83AF4E02FA752A500D21349 /* PBXContainerItemProxy */;
 		};
 		C83AF4EB2FA752A500D21349 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = C83AF4CF2FA752A400D21349 /* image-browser */;
+			target = C83AF4CF2FA752A400D21349 /* KukImg */;
 			targetProxy = C83AF4EA2FA752A500D21349 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -403,14 +403,15 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Kuk;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.image-browser";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.KukImg";
+				PRODUCT_NAME = Kuk;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -435,14 +436,15 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Kuk;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.image-browser";
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.KukImg";
+				PRODUCT_NAME = Kuk;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -463,14 +465,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.image-browserTests";
+				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.KukImgTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/image-browser.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/image-browser";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kuk.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kuk";
 			};
 			name = Debug;
 		};
@@ -484,14 +486,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.image-browserTests";
+				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.KukImgTests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/image-browser.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/image-browser";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kuk.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Kuk";
 			};
 			name = Release;
 		};
@@ -503,14 +505,14 @@
 				DEVELOPMENT_TEAM = LSHYS2FLV7;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.image-browserUITests";
+				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.KukImgUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = "image-browser";
+				TEST_TARGET_NAME = "KukImg";
 			};
 			name = Debug;
 		};
@@ -522,21 +524,21 @@
 				DEVELOPMENT_TEAM = LSHYS2FLV7;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.image-browserUITests";
+				PRODUCT_BUNDLE_IDENTIFIER = "msvarc.KukImgUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = "image-browser";
+				TEST_TARGET_NAME = "KukImg";
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		C83AF4CB2FA752A400D21349 /* Build configuration list for PBXProject "image-browser" */ = {
+		C83AF4CB2FA752A400D21349 /* Build configuration list for PBXProject "KukImg" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C83AF4F12FA752A500D21349 /* Debug */,
@@ -545,7 +547,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C83AF4F32FA752A500D21349 /* Build configuration list for PBXNativeTarget "image-browser" */ = {
+		C83AF4F32FA752A500D21349 /* Build configuration list for PBXNativeTarget "KukImg" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C83AF4F42FA752A500D21349 /* Debug */,
@@ -554,7 +556,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C83AF4F62FA752A500D21349 /* Build configuration list for PBXNativeTarget "image-browserTests" */ = {
+		C83AF4F62FA752A500D21349 /* Build configuration list for PBXNativeTarget "KukImgTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C83AF4F72FA752A500D21349 /* Debug */,
@@ -563,7 +565,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C83AF4F92FA752A500D21349 /* Build configuration list for PBXNativeTarget "image-browserUITests" */ = {
+		C83AF4F92FA752A500D21349 /* Build configuration list for PBXNativeTarget "KukImgUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C83AF4FA2FA752A500D21349 /* Debug */,

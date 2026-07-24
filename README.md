@@ -1,4 +1,4 @@
-# Image Browser
+# Kuk
 
 A fast, native macOS image viewer built with SwiftUI. Designed for flipping through large folders of photos with zero friction — thumbnails come from the system QuickLook cache, everything decodes off the main thread, and stale work is cancelled the moment you move on.
 
@@ -38,12 +38,12 @@ A fast, native macOS image viewer built with SwiftUI. Designed for flipping thro
 ## Building
 
 ```bash
-git clone https://github.com/mirasvarc/image-browser.git
-cd image-browser
-open image-browser.xcodeproj
+git clone https://github.com/mirasvarc/KukImg.git
+cd KukImg
+open KukImg.xcodeproj
 ```
 
-Build and run the `image-browser` scheme (⌘R). No dependencies — the app uses only system frameworks (SwiftUI, AppKit, QuickLookThumbnailing, ImageIO).
+Build and run the `KukImg` scheme (⌘R). No dependencies — the app uses only system frameworks (SwiftUI, AppKit, QuickLookThumbnailing, ImageIO).
 
 ## Architecture notes
 
