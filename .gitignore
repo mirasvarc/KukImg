@@ -7,7 +7,7 @@ xcuserdata/
 build/
 DerivedData/
 *.ipa
-*.dSYM.zip
+*.zip
 *.dSYM
 
 # Swift Package Manager
