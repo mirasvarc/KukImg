@@ -10,12 +10,12 @@ A fast, native macOS image viewer built with SwiftUI. Designed for flipping thro
 
 - **Fast grid browsing** — lazy grid with quantized thumbnail sizes, adjustable via a toolbar slider; thumbnails are served from a memory cache backed by QuickLook (the same cache Finder uses) with an ImageIO fallback
 - **Instant navigation** — neighboring images are prefetched around the selection, and prefetches/decodes that fall out of view are cancelled, so holding an arrow key stays smooth even in huge folders
-- **Detail view** — fit-to-window by default, pinch to zoom, double-click to toggle fit ↔ 100 %, EXIF orientation handled correctly
-- **Fullscreen mode** — distraction-free viewing with a slideshow (next image preloaded, cursor auto-hidden)
-- **Metadata panel** — dimensions, camera, lens, ISO, shutter, aperture, focal length, GPS from EXIF
-- **Filter & sort** — live filename filter, six sort orders, optional recursive folder scan
+- **Detail view** — fit-to-window by default, pinch to zoom, double-click to toggle fit ↔ 100 %, zoom shortcuts (⌘+/⌘−/⌘1/⌘0), EXIF orientation handled correctly
+- **Fullscreen mode** — distraction-free viewing with a slideshow (adjustable interval, optional loop, neighbors preloaded, cursor auto-hidden)
+- **Metadata panel** — dimensions, camera, lens, ISO, shutter, aperture, focal length, GPS from EXIF with an Open in Maps link
+- **Filter & sort** — live filename filter, six sort orders, optional recursive folder scan, optional filename labels under thumbnails
 - **Live folder watching** — files added or removed in Finder show up automatically
-- **Finder integration** — drag & drop a folder (or a single image), reveal in Finder, copy, move to Trash
+- **Finder integration** — drag & drop a folder (or a single image) in, drag images out, reveal in Finder, copy (file + bitmap), move to Trash with Undo
 - **Open With** — registers as a viewer for images and folders, so it appears in Finder's Open With menu and can be set as the default image viewer (Get Info → Open with → Change All…)
 - **Recent folders** — sidebar and File → Open Recent, restored across launches via security-scoped bookmarks (the app is sandboxed)
 - **Automatic updates** — new versions are offered and installed in-app via [Sparkle](https://sparkle-project.org)
@@ -29,7 +29,10 @@ A fast, native macOS image viewer built with SwiftUI. Designed for flipping thro
 | Return / Space | Open fullscreen |
 | Esc | Leave fullscreen |
 | Space / P (fullscreen) | Toggle slideshow |
-| ⌫ (fullscreen), ⌘⌫ | Move to Trash |
+| ⌫, ⌘⌫ | Move to Trash |
+| ⌘Z | Undo Move to Trash |
+| ⌘+ / ⌘− | Zoom in / out |
+| ⌘1 / ⌘0 | Actual size / Zoom to fit |
 | ⌘O | Open folder |
 | ⇧⌘C | Copy image |
 | ⇧⌘R | Show in Finder |

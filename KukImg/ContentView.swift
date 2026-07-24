@@ -2,7 +2,9 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.undoManager) private var undoManager
     @State private var thumbSize: CGFloat = 160
+    @AppStorage("showFilenames") private var showFilenames = false
 
     var body: some View {
         @Bindable var model = model
@@ -33,6 +35,8 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: model.isFullscreen)
+        .onAppear { model.undoManager = undoManager }
+        .onChange(of: undoManager) { _, new in model.undoManager = new }
     }
 
     @ToolbarContentBuilder
@@ -52,6 +56,7 @@ struct ContentView: View {
                 .pickerStyle(.inline)
                 Divider()
                 Toggle("Include Subfolders", isOn: subfoldersBinding)
+                Toggle("Show Filenames", isOn: $showFilenames)
             } label: {
                 Label("View", systemImage: "arrow.up.arrow.down")
             }

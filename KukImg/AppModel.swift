@@ -10,6 +10,15 @@ nonisolated struct ImageItem: Identifiable, Hashable, Sendable {
     var name: String { url.lastPathComponent }
 }
 
+enum ZoomCommand: Equatable, Sendable { case zoomIn, zoomOut, actualSize, fit }
+
+/// A one-shot zoom request from the menu bar; `id` makes repeated identical
+/// commands distinct so `onChange` in DetailView fires every time.
+struct ZoomRequest: Equatable, Sendable {
+    let command: ZoomCommand
+    let id: Int
+}
+
 enum SortOrder: String, CaseIterable, Codable, Sendable {
     case nameAsc, nameDesc, modifiedDesc, modifiedAsc, sizeDesc, sizeAsc
 
@@ -48,7 +57,12 @@ final class AppModel {
         }
     }
     var recents: [RecentFolder] = []
+    private(set) var zoomRequest: ZoomRequest?
+    /// The focused window's undo manager, attached by ContentView so that
+    /// Move to Trash can be undone via the standard Edit → Undo.
+    weak var undoManager: UndoManager?
 
+    private var zoomRequestCount = 0
     private var accessedURL: URL?
     private let prefetcher = Prefetcher()
     private var scanGeneration = 0
@@ -270,17 +284,31 @@ final class AppModel {
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
 
+    /// Puts both the file URL and the decoded bitmap on the pasteboard, so
+    /// pasting works in Finder (file) as well as Mail/editors (image data).
     func copy(_ item: ImageItem) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.writeObjects([item.url as NSURL])
+        Task {
+            let image = await FullImageCache.shared.image(for: item.url)
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            var objects: [NSPasteboardWriting] = [item.url as NSURL]
+            if let image { objects.append(image) }
+            pb.writeObjects(objects)
+        }
     }
 
     func delete(_ item: ImageItem) {
         guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
         let visibleIdx = visibleItems.firstIndex(where: { $0.id == item.id })
         do {
-            try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
+            var trashed: NSURL?
+            try FileManager.default.trashItem(at: item.url, resultingItemURL: &trashed)
+            if let trashURL = trashed as URL? {
+                undoManager?.registerUndo(withTarget: self) { model in
+                    model.restoreFromTrash(originalURL: item.url, trashURL: trashURL)
+                }
+                undoManager?.setActionName("Move to Trash")
+            }
             let wasSelected = selection == item.id
             items.remove(at: idx)
             if wasSelected {
@@ -295,6 +323,23 @@ final class AppModel {
         } catch {
             NSSound.beep()
         }
+    }
+
+    private func restoreFromTrash(originalURL: URL, trashURL: URL) {
+        do {
+            try FileManager.default.moveItem(at: trashURL, to: originalURL)
+            pendingSelection = originalURL
+            rescan()
+        } catch {
+            NSSound.beep()
+        }
+    }
+
+    // MARK: - Zoom
+
+    func requestZoom(_ command: ZoomCommand) {
+        zoomRequestCount += 1
+        zoomRequest = ZoomRequest(command: command, id: zoomRequestCount)
     }
 
     // MARK: - Prefetching

@@ -24,12 +24,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct KukImgApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
+    @AppStorage("showFilenames") private var showFilenames = false
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
     )
 
     var body: some Scene {
-        WindowGroup {
+        // A single Window (not WindowGroup): the whole app shares one AppModel,
+        // so a second window would just mirror the first one's selection.
+        Window("Kuk", id: "main") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 800, minHeight: 600)
@@ -70,6 +73,22 @@ struct KukImgApp: App {
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(model.currentItem == nil)
             }
+            CommandGroup(before: .toolbar) {
+                Button("Zoom In") { model.requestZoom(.zoomIn) }
+                    .keyboardShortcut("+", modifiers: .command)
+                    .disabled(zoomUnavailable)
+                Button("Zoom Out") { model.requestZoom(.zoomOut) }
+                    .keyboardShortcut("-", modifiers: .command)
+                    .disabled(zoomUnavailable)
+                Button("Actual Size") { model.requestZoom(.actualSize) }
+                    .keyboardShortcut("1", modifiers: .command)
+                    .disabled(zoomUnavailable)
+                Button("Zoom to Fit") { model.requestZoom(.fit) }
+                    .keyboardShortcut("0", modifiers: .command)
+                    .disabled(zoomUnavailable)
+                Divider()
+                Toggle("Show Filenames", isOn: $showFilenames)
+            }
             CommandMenu("Sort") {
                 ForEach(SortOrder.allCases, id: \.self) { order in
                     Button {
@@ -89,5 +108,10 @@ struct KukImgApp: App {
                 ))
             }
         }
+    }
+
+    /// Zoom acts on the detail view, which is idle while fullscreen is up.
+    private var zoomUnavailable: Bool {
+        model.currentItem == nil || model.isFullscreen
     }
 }

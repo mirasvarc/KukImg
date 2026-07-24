@@ -12,8 +12,10 @@ struct FullscreenView: View {
     @State private var isPlaying = false
     @State private var slideshowTask: Task<Void, Never>?
     @FocusState private var focused: Bool
+    @AppStorage("slideshowInterval") private var interval: Double = 4.0
+    @AppStorage("slideshowLoop") private var loops = false
 
-    private let interval: TimeInterval = 4.0
+    private static let intervals: [Double] = [2, 4, 8, 15]
 
     var body: some View {
         ZStack {
@@ -32,6 +34,7 @@ struct FullscreenView: View {
             VStack {
                 HStack {
                     Spacer()
+                    slideshowSettingsMenu
                     chromeButton(systemName: isPlaying ? "pause.fill" : "play.fill") {
                         toggleSlideshow()
                     }
@@ -87,12 +90,40 @@ struct FullscreenView: View {
             if !Task.isCancelled, let img { fullImage = img }
             model.prefetchNeighbors(thumbSize: 256, scale: scale)
 
-            // Warm the next full image so arrow keys and the slideshow are instant.
+            // Warm the neighboring full images so arrow keys and the slideshow
+            // are instant in both directions.
             if let idx = model.currentIndex, idx + 1 < model.visibleItems.count {
                 let next = model.visibleItems[idx + 1].url
                 _ = await FullImageCache.shared.image(for: next)
             }
+            if let idx = model.currentIndex, idx > 0, idx - 1 < model.visibleItems.count {
+                let previous = model.visibleItems[idx - 1].url
+                _ = await FullImageCache.shared.image(for: previous)
+            }
         }
+    }
+
+    private var slideshowSettingsMenu: some View {
+        Menu {
+            Picker("Interval", selection: $interval) {
+                ForEach(Self.intervals, id: \.self) { value in
+                    Text("\(Int(value)) s").tag(value)
+                }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Toggle("Loop", isOn: $loops)
+        } label: {
+            Image(systemName: "timer")
+                .font(.title3)
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .help("Slideshow settings")
     }
 
     private func chromeButton(systemName: String, action: @escaping () -> Void) -> some View {
@@ -124,14 +155,22 @@ struct FullscreenView: View {
         slideshowTask?.cancel()
         slideshowTask = Task { @MainActor [weak model = model] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(interval))
+                // Read settings each round so changes apply mid-slideshow.
+                let defaults = UserDefaults.standard
+                let stored = defaults.double(forKey: "slideshowInterval")
+                try? await Task.sleep(for: .seconds(stored > 0 ? stored : 4.0))
                 if Task.isCancelled { break }
                 guard let model else { break }
-                if let idx = model.currentIndex, idx >= model.visibleItems.count - 1 {
-                    break
+                let atEnd = (model.currentIndex ?? 0) >= model.visibleItems.count - 1
+                if atEnd {
+                    guard defaults.bool(forKey: "slideshowLoop"),
+                          model.visibleItems.count > 1 else { break }
+                    NSCursor.setHiddenUntilMouseMoves(true)
+                    model.selectFirst()
+                } else {
+                    NSCursor.setHiddenUntilMouseMoves(true)
+                    model.move(by: 1)
                 }
-                NSCursor.setHiddenUntilMouseMoves(true)
-                model.move(by: 1)
             }
             self.isPlaying = false
         }

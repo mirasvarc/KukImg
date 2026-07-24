@@ -60,6 +60,15 @@ struct DetailView: View {
             }
         }
         .navigationTitle(item.name)
+        .onChange(of: model.zoomRequest) { _, request in
+            guard let request else { return }
+            switch request.command {
+            case .zoomIn:     setZoom(currentZoom * 1.25)
+            case .zoomOut:    setZoom(currentZoom / 1.25)
+            case .actualSize: setZoom(1.0)
+            case .fit:        zoomMode = .fit
+            }
+        }
         .task(id: item.id) {
             zoomMode = .fit
             fullImage = nil

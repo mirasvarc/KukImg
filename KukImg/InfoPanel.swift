@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct InfoPanel: View {
     let item: ImageItem
@@ -42,7 +43,16 @@ struct InfoPanel: View {
 
                 if let lat = meta?.latitude, let lon = meta?.longitude {
                     Divider()
-                    section { row("GPS", String(format: "%.5f, %.5f", lat, lon)) }
+                    section {
+                        row("GPS", String(format: "%.5f, %.5f", lat, lon))
+                        Button {
+                            openInMaps(latitude: lat, longitude: lon)
+                        } label: {
+                            Label("Open in Maps", systemImage: "map")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.link)
+                    }
                 }
 
                 Spacer(minLength: 0)
@@ -54,6 +64,17 @@ struct InfoPanel: View {
         .background(.regularMaterial)
         .task(id: item.id) {
             self.meta = await MetadataCache.shared.metadata(for: item.url)
+        }
+    }
+
+    private func openInMaps(latitude: Double, longitude: Double) {
+        var components = URLComponents(string: "https://maps.apple.com/")!
+        components.queryItems = [
+            URLQueryItem(name: "ll", value: "\(latitude),\(longitude)"),
+            URLQueryItem(name: "q", value: item.name)
+        ]
+        if let url = components.url {
+            NSWorkspace.shared.open(url)
         }
     }
 
