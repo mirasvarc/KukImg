@@ -5,7 +5,9 @@ xcuserdata/
 
 # Build products
 build/
+dist/
 DerivedData/
+.sparkle-tools/
 *.ipa
 *.zip
 *.dSYM

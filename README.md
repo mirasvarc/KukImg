@@ -14,7 +14,9 @@ A fast, native macOS image viewer built with SwiftUI. Designed for flipping thro
 - **Filter & sort** — live filename filter, six sort orders, optional recursive folder scan
 - **Live folder watching** — files added or removed in Finder show up automatically
 - **Finder integration** — drag & drop a folder (or a single image), reveal in Finder, copy, move to Trash
+- **Open With** — registers as a viewer for images and folders, so it appears in Finder's Open With menu and can be set as the default image viewer (Get Info → Open with → Change All…)
 - **Recent folders** — sidebar and File → Open Recent, restored across launches via security-scoped bookmarks (the app is sandboxed)
+- **Automatic updates** — new versions are offered and installed in-app via [Sparkle](https://sparkle-project.org)
 
 ## Keyboard shortcuts
 
@@ -29,6 +31,19 @@ A fast, native macOS image viewer built with SwiftUI. Designed for flipping thro
 | ⌘O | Open folder |
 | ⇧⌘C | Copy image |
 | ⇧⌘R | Show in Finder |
+
+## Installation
+
+Download the latest `Kuk-v*.zip` from [Releases](https://github.com/mirasvarc/KukImg/releases), unzip, and move `Kuk.app` to `/Applications`.
+
+> **Note:** the app is not notarized. On first launch macOS will refuse to open it — go to System Settings → Privacy & Security and click **Open Anyway**. This is needed only once; automatic updates install without it.
+
+Or with Homebrew:
+
+```bash
+brew tap mirasvarc/tap
+brew install --cask --no-quarantine kuk
+```
 
 ## Requirements
 

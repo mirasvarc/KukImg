@@ -138,8 +138,35 @@ final class AppModel {
             load(folder: url, isSecurityScoped: false)
         } else if values?.contentType?.conforms(to: .image) == true {
             pendingSelection = url
-            load(folder: url.deletingLastPathComponent(), isSecurityScoped: false)
+            let parent = url.deletingLastPathComponent()
+            // Reuse a stored bookmark when the parent folder is in Recents —
+            // that grants sandbox access to the whole folder, not just the file.
+            if let scoped = recents.lazy.compactMap(RecentFolders.resolve).first(where: { $0.path == parent.path }) {
+                load(folder: scoped, isSecurityScoped: true)
+            } else if (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) != nil {
+                load(folder: parent, isSecurityScoped: false)
+            } else if let granted = requestFolderAccess(for: parent) {
+                load(folder: granted, isSecurityScoped: false)
+            } else {
+                // Declined — applyScanResult falls back to showing just this file.
+                load(folder: parent, isSecurityScoped: false)
+            }
         }
+    }
+
+    /// The sandbox only grants access to the opened file itself, so browsing
+    /// its siblings needs the user to grant folder access once (a bookmark is
+    /// stored afterwards). Returns nil when the user declines.
+    private func requestFolderAccess(for parent: URL) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = parent
+        panel.message = "Kuk can only see the opened image. Grant access to “\(parent.lastPathComponent)” to browse all images in it."
+        panel.prompt = "Grant Access"
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url
     }
 
     func load(folder url: URL, isSecurityScoped: Bool) {
