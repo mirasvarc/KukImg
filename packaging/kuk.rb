@@ -11,6 +11,13 @@ cask "kuk" do
 
   app "Kuk.app"
 
+  # The app is not notarized — drop the quarantine flag so Gatekeeper
+  # doesn't block the first launch (Homebrew 6 removed --no-quarantine).
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Kuk.app"]
+  end
+
   zap trash: [
     "~/Library/Containers/msvarc.KukImg",
   ]

@@ -1,3 +1,5 @@
+<img src="docs/icon.png" width="128" align="left" alt="Kuk icon">
+
 # Kuk
 
 A fast, native macOS image viewer built with SwiftUI. Designed for flipping through large folders of photos with zero friction — thumbnails come from the system QuickLook cache, everything decodes off the main thread, and stale work is cancelled the moment you move on.
@@ -42,8 +44,10 @@ Or with Homebrew:
 
 ```bash
 brew tap mirasvarc/tap
-brew install --cask --no-quarantine kuk
+brew install --cask kuk
 ```
+
+(The cask removes the quarantine flag automatically, so the app starts without Gatekeeper prompts.)
 
 ## Requirements
 
