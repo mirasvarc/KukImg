@@ -1,6 +1,6 @@
 cask "kuk" do
-  version "1.1.0"
-  sha256 "2016ee9be9e6f7ba1b6de955a2786a8b5524226081b306bb6eceb0c60dc6ce32"
+  version "1.2.0"
+  sha256 "4b337ca8852419e09490160a46c0a2bdff69daf25a64fad7bf9fc75b1ba7d4a3"
 
   url "https://github.com/mirasvarc/KukImg/releases/download/v#{version}/Kuk-v#{version}.zip"
   name "Kuk"
