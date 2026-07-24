@@ -94,13 +94,26 @@ struct ContentView: View {
 
     private var sidebar: some View {
         List {
-            if let folder = model.folder {
-                Section("Current") {
-                    Label(folder.lastPathComponent, systemImage: "folder.fill")
-                    Text(countLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            if !model.openFolders.isEmpty {
+                Section("Folders") {
+                    ForEach(model.openFolders, id: \.self) { root in
+                        FolderTreeRow(url: root, isRoot: true)
+                    }
+                    if model.folder != nil {
+                        Text(countLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+            }
+            Section {
+                Button { model.pickFolder() } label: {
+                    Label(
+                        model.openFolders.isEmpty ? "Open Folder…" : "Add Folder…",
+                        systemImage: "plus"
+                    )
+                }
+                .buttonStyle(.plain)
             }
             if !model.recents.isEmpty {
                 Section("Recent") {
@@ -117,10 +130,13 @@ struct ContentView: View {
                         .foregroundStyle(
                             recent.path == model.folder?.path ? Color.accentColor : .primary
                         )
+                        .contextMenu {
+                            Button("Remove from Recents") { model.removeRecent(recent) }
+                        }
                     }
                 }
             }
-            if model.folder == nil && model.recents.isEmpty {
+            if model.openFolders.isEmpty && model.recents.isEmpty {
                 ContentUnavailableView(
                     "No Folder",
                     systemImage: "photo.on.rectangle",

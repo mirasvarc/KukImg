@@ -36,7 +36,10 @@ enum SortOrder: String, CaseIterable, Codable, Sendable {
 
 @Observable
 final class AppModel {
+    /// Folder whose images are currently shown (a root or any of its subfolders).
     var folder: URL?
+    /// Root folders shown as trees in the sidebar.
+    private(set) var openFolders: [URL] = []
     var items: [ImageItem] = [] { didSet { updateVisibleItems() } }
     private(set) var visibleItems: [ImageItem] = []
     var selection: ImageItem.ID?
@@ -63,7 +66,8 @@ final class AppModel {
     weak var undoManager: UndoManager?
 
     private var zoomRequestCount = 0
-    private var accessedURL: URL?
+    /// Roots we hold a security scope for; released on close/deinit.
+    private var securityScopedRoots: [URL] = []
     private let prefetcher = Prefetcher()
     private var scanGeneration = 0
     /// File to select once the next scan finishes (used when an image is dropped).
@@ -81,7 +85,7 @@ final class AppModel {
 
     deinit {
         folderMonitor?.cancel()
-        accessedURL?.stopAccessingSecurityScopedResource()
+        for url in securityScopedRoots { url.stopAccessingSecurityScopedResource() }
     }
 
     var currentItem: ImageItem? {
@@ -123,22 +127,31 @@ final class AppModel {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.prompt = "Open"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        load(folder: url, isSecurityScoped: false)
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            openRoot(url, isSecurityScoped: false)
+        }
     }
 
     func restoreLastFolder() {
-        guard folder == nil,
+        // Preference default is true; bool(forKey:) alone would default to false.
+        let wanted = UserDefaults.standard.object(forKey: "restoreLastFolder") as? Bool ?? true
+        guard wanted,
+              openFolders.isEmpty,
               let recent = recents.first,
               let url = RecentFolders.resolve(recent) else { return }
-        load(folder: url, isSecurityScoped: true)
+        openRoot(url, isSecurityScoped: true)
     }
 
     func openRecent(_ recent: RecentFolder) {
         guard let url = RecentFolders.resolve(recent) else { return }
-        load(folder: url, isSecurityScoped: true)
+        openRoot(url, isSecurityScoped: true)
+    }
+
+    func removeRecent(_ recent: RecentFolder) {
+        recents = RecentFolders.remove(recent)
     }
 
     func clearRecents() {
@@ -149,21 +162,21 @@ final class AppModel {
     func handleDrop(_ url: URL) {
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentTypeKey])
         if values?.isDirectory == true {
-            load(folder: url, isSecurityScoped: false)
+            openRoot(url, isSecurityScoped: false)
         } else if values?.contentType?.conforms(to: .image) == true {
             pendingSelection = url
             let parent = url.deletingLastPathComponent()
             // Reuse a stored bookmark when the parent folder is in Recents —
             // that grants sandbox access to the whole folder, not just the file.
             if let scoped = recents.lazy.compactMap(RecentFolders.resolve).first(where: { $0.path == parent.path }) {
-                load(folder: scoped, isSecurityScoped: true)
+                openRoot(scoped, isSecurityScoped: true)
             } else if (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) != nil {
-                load(folder: parent, isSecurityScoped: false)
+                openRoot(parent, isSecurityScoped: false)
             } else if let granted = requestFolderAccess(for: parent) {
-                load(folder: granted, isSecurityScoped: false)
+                openRoot(granted, isSecurityScoped: false)
             } else {
                 // Declined — applyScanResult falls back to showing just this file.
-                load(folder: parent, isSecurityScoped: false)
+                openRoot(parent, isSecurityScoped: false)
             }
         }
     }
@@ -183,15 +196,23 @@ final class AppModel {
         return url
     }
 
-    func load(folder url: URL, isSecurityScoped: Bool) {
-        accessedURL?.stopAccessingSecurityScopedResource()
-        accessedURL = nil
-        if isSecurityScoped {
-            guard url.startAccessingSecurityScopedResource() else { return }
-            accessedURL = url
+    /// Opens a folder as a sidebar root (keeping any already open roots) and
+    /// shows its contents. Security scopes are held per root until closed.
+    func openRoot(_ url: URL, isSecurityScoped: Bool) {
+        if !openFolders.contains(where: { $0.path == url.path }) {
+            if isSecurityScoped {
+                guard url.startAccessingSecurityScopedResource() else { return }
+                securityScopedRoots.append(url)
+            }
+            openFolders.append(url)
         }
-
         recents = RecentFolders.add(url)
+        display(folder: url)
+    }
+
+    /// Shows the contents of a folder — a root or any subfolder from the tree.
+    /// Sandbox access to subfolders flows from their root's active scope.
+    func display(folder url: URL) {
         self.folder = url
         self.items = []
         self.selection = nil
@@ -199,6 +220,31 @@ final class AppModel {
         prefetcher.cancelAll()
         startMonitoring(url)
         rescan()
+    }
+
+    /// Removes a root from the sidebar and releases its security scope.
+    func closeRoot(_ url: URL) {
+        openFolders.removeAll { $0.path == url.path }
+        if let idx = securityScopedRoots.firstIndex(where: { $0.path == url.path }) {
+            securityScopedRoots[idx].stopAccessingSecurityScopedResource()
+            securityScopedRoots.remove(at: idx)
+        }
+        // If the displayed folder lived under the closed root, switch away.
+        guard let current = folder,
+              current.path == url.path || current.path.hasPrefix(url.path + "/")
+        else { return }
+        if let next = openFolders.first {
+            display(folder: next)
+        } else {
+            scanGeneration += 1  // invalidate any in-flight scan
+            folder = nil
+            items = []
+            selection = nil
+            isLoading = false
+            prefetcher.cancelAll()
+            folderMonitor?.cancel()
+            folderMonitor = nil
+        }
     }
 
     // MARK: - Scanning

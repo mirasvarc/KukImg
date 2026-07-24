@@ -17,7 +17,9 @@ A fast, native macOS image viewer built with SwiftUI. Designed for flipping thro
 - **Live folder watching** — files added or removed in Finder show up automatically
 - **Finder integration** — drag & drop a folder (or a single image) in, drag images out, reveal in Finder, copy (file + bitmap), move to Trash with Undo
 - **Open With** — registers as a viewer for images and folders, so it appears in Finder's Open With menu and can be set as the default image viewer (Get Info → Open with → Change All…)
-- **Recent folders** — sidebar and File → Open Recent, restored across launches via security-scoped bookmarks (the app is sandboxed)
+- **Folder tree** — sidebar shows each open folder as a lazily loaded tree of its subfolders with per-folder image counts; multiple folders can be open at once (Add Folder… button, multi-select in the open panel) and closed individually
+- **Settings** (⌘,) — startup, thumbnail and slideshow options, plus app info and update check
+- **Recent folders** — sidebar and File → Open Recent, restored across launches via security-scoped bookmarks (the app is sandboxed); individual entries removable from the sidebar
 - **Automatic updates** — new versions are offered and installed in-app via [Sparkle](https://sparkle-project.org)
 
 ## Keyboard shortcuts

@@ -108,6 +108,10 @@ struct KukImgApp: App {
                 ))
             }
         }
+
+        Settings {
+            SettingsView(updater: updaterController.updater)
+        }
     }
 
     /// Zoom acts on the detail view, which is idle while fullscreen is up.

@@ -43,6 +43,15 @@ nonisolated enum RecentFolders {
         return list
     }
 
+    @discardableResult
+    static func remove(_ recent: RecentFolder) -> [RecentFolder] {
+        let list = all().filter { $0.path != recent.path }
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+        return list
+    }
+
     static func clear() {
         UserDefaults.standard.removeObject(forKey: key)
     }
