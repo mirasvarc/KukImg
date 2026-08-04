@@ -1,8 +1,20 @@
-<img src="docs/icon.png" width="128" align="left" alt="Kuk icon">
+<div align="center">
+
+<img src="docs/icon.png" width="128" alt="Kuk icon">
 
 # Kuk
 
-A fast, native macOS image viewer built with SwiftUI. Designed for flipping through large folders of photos with zero friction — thumbnails come from the system QuickLook cache, everything decodes off the main thread, and stale work is cancelled the moment you move on.
+**A fast, native macOS image viewer built with SwiftUI.**
+
+Designed for flipping through large folders of photos with zero friction — thumbnails come from the system QuickLook cache, everything decodes off the main thread, and stale work is cancelled the moment you move on.
+
+[![Latest release](https://img.shields.io/github/v/release/mirasvarc/KukImg?label=release)](https://github.com/mirasvarc/KukImg/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-blue)](#requirements)
+[![License](https://img.shields.io/github/license/mirasvarc/KukImg)](LICENSE)
+
+[Features](#features) · [Shortcuts](#keyboard-shortcuts) · [Installation](#installation) · [Building](#building)
+
+</div>
 
 <!-- Add a screenshot: docs/screenshot.png -->
 
