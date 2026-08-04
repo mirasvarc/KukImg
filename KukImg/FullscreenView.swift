@@ -6,99 +6,175 @@ struct FullscreenView: View {
     @Environment(\.displayScale) private var scale
     let item: ImageItem
 
-    @State private var fullImage: NSImage?
-    @State private var preview: NSImage?
-    @State private var hovering = false
+    @State private var zoomMode: ZoomMode = .fit
+    @State private var pixelSize: CGSize?
+    @State private var containerSize: CGSize = .zero
+    @State private var chromeVisible = true
+    /// True while the pointer rests on a chrome bar — blocks auto-hide.
+    @State private var overChrome = false
+    @State private var hideChromeTask: Task<Void, Never>?
     @State private var isPlaying = false
     @State private var slideshowTask: Task<Void, Never>?
+    /// Local monitor for trackpad swipes and mouse back/forward buttons.
+    @State private var eventMonitor: Any?
     @FocusState private var focused: Bool
     @AppStorage("slideshowInterval") private var interval: Double = 4.0
     @AppStorage("slideshowLoop") private var loops = false
+    @AppStorage("slideshowShuffle") private var shuffle = false
 
     private static let intervals: [Double] = [2, 4, 8, 15]
+
+    private var math: ZoomMath {
+        ZoomMath(containerSize: containerSize, pixelSize: pixelSize, displayScale: scale)
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            PhotoCanvas(
+                item: item,
+                zoomMode: $zoomMode,
+                pixelSize: $pixelSize,
+                backgroundColor: .black
+            )
+            .ignoresSafeArea()
+            chrome
+        }
+        .ignoresSafeArea()
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { containerSize = $0 }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onContinuousHover { phase in
+            guard case .active = phase else { return }
+            showChrome()
+        }
+        .onAppear {
+            focused = true
+            showChrome()
+            installEventMonitor()
+        }
+        .onDisappear {
+            stopSlideshow()
+            hideChromeTask?.cancel()
+            removeEventMonitor()
+        }
+        .onKeyPress(.leftArrow)  { navigate { model.move(by: -1) } }
+        .onKeyPress(.rightArrow) { navigate { model.move(by:  1) } }
+        .onKeyPress(.upArrow)    { navigate { model.move(by: -1) } }
+        .onKeyPress(.downArrow)  { navigate { model.move(by:  1) } }
+        .onKeyPress(.home)       { navigate { model.selectFirst() } }
+        .onKeyPress(.end)        { navigate { model.selectLast() } }
+        .onKeyPress(.escape)     { model.isFullscreen = false; return .handled }
+        .onKeyPress(.return)     { model.isFullscreen = false; return .handled }
+        .onKeyPress(.space)      { toggleSlideshow(); return .handled }
+        .onKeyPress("p")         { model.setFlag(.pick, for: [item]); return .handled }
+        .onKeyPress("x")         { model.setFlag(.reject, for: [item]); return .handled }
+        .onKeyPress("u")         { model.setFlag(nil, for: [item]); return .handled }
+        // Only the image on screen — never a wider selection made in the grid.
+        .onKeyPress(.delete)     { model.delete([item]); return .handled }
+        .onChange(of: model.zoomRequest) { _, request in
+            guard let request else { return }
+            zoomMode = math.apply(request.command, to: zoomMode)
+        }
+    }
 
-            if let img = fullImage ?? preview {
-                Image(nsImage: img)
-                    .resizable()
-                    .interpolation(fullImage == nil ? .low : .high)
-                    .scaledToFit()
-                    .padding(8)
-            } else {
-                ProgressView().tint(.white)
-            }
+    // MARK: - Chrome
 
-            VStack {
-                HStack {
-                    Spacer()
-                    slideshowSettingsMenu
-                    chromeButton(systemName: isPlaying ? "pause.fill" : "play.fill") {
-                        toggleSlideshow()
-                    }
-                    chromeButton(systemName: "xmark") {
-                        model.isFullscreen = false
-                    }
-                }
-                .padding()
-                .opacity(hovering || isPlaying ? 1 : 0)
-
+    private var chrome: some View {
+        VStack {
+            HStack {
                 Spacer()
+                chromeButton(systemName: "square.and.arrow.up") {
+                    Sharing.share([item])
+                }
+                slideshowSettingsMenu
+                chromeButton(systemName: isPlaying ? "pause.fill" : "play.fill") {
+                    toggleSlideshow()
+                }
+                chromeButton(systemName: "xmark") {
+                    model.isFullscreen = false
+                }
+            }
+            .padding()
+            .onHover { overChrome = $0 }
 
+            Spacer()
+
+            VStack(spacing: 10) {
+                if model.visibleItems.count > 1 {
+                    filmstrip
+                }
                 HStack {
                     chromeLabel { Text(item.name) }
+                    if let flag = model.flag(for: item) {
+                        chromeLabel {
+                            Label(
+                                flag == .pick ? "Picked" : "Rejected",
+                                systemImage: flag == .pick ? "checkmark.circle.fill" : "xmark.circle.fill"
+                            )
+                            .foregroundStyle(flag == .pick ? Color.green : Color.red)
+                        }
+                    }
                     if isPlaying {
                         chromeLabel { Label("Slideshow", systemImage: "play.fill") }
+                    }
+                    if case .zoom = zoomMode {
+                        chromeLabel { Text(math.label(for: zoomMode)) }
                     }
                     Spacer()
                     if let idx = model.currentIndex {
                         chromeLabel { Text("\(idx + 1) / \(model.visibleItems.count)") }
                     }
                 }
-                .padding()
-                .opacity(hovering ? 1 : 0)
             }
-            .animation(.easeInOut(duration: 0.2), value: hovering)
-            .animation(.easeInOut(duration: 0.2), value: isPlaying)
+            .padding()
+            .onHover { overChrome = $0 }
         }
-        .ignoresSafeArea()
-        .focusable()
-        .focusEffectDisabled()
-        .focused($focused)
-        .onAppear { focused = true }
-        .onDisappear { stopSlideshow() }
-        .onHover { hovering = $0 }
-        .onKeyPress(.leftArrow)  { model.move(by: -1); return .handled }
-        .onKeyPress(.rightArrow) { model.move(by:  1); return .handled }
-        .onKeyPress(.upArrow)    { model.move(by: -1); return .handled }
-        .onKeyPress(.downArrow)  { model.move(by:  1); return .handled }
-        .onKeyPress(.home)       { model.selectFirst(); return .handled }
-        .onKeyPress(.end)        { model.selectLast();  return .handled }
-        .onKeyPress(.escape)     { model.isFullscreen = false; return .handled }
-        .onKeyPress(.return)     { model.isFullscreen = false; return .handled }
-        .onKeyPress(.space)      { toggleSlideshow(); return .handled }
-        .onKeyPress("p")         { toggleSlideshow(); return .handled }
-        .onKeyPress(.delete)     { model.deleteCurrent(); return .handled }
-        .task(id: item.id) {
-            fullImage = nil
-            preview = await ThumbnailCache.shared.thumbnail(
-                for: item.url, pixelSize: 2048, scale: scale
-            )
-            let img = await FullImageCache.shared.image(for: item.url)
-            if !Task.isCancelled, let img { fullImage = img }
-            model.prefetchNeighbors(thumbSize: 256, scale: scale)
+        .opacity(chromeVisible ? 1 : 0)
+        .allowsHitTesting(chromeVisible)
+        .animation(.easeInOut(duration: 0.2), value: chromeVisible)
+        .animation(.easeInOut(duration: 0.2), value: isPlaying)
+    }
 
-            // Warm the neighboring full images so arrow keys and the slideshow
-            // are instant in both directions.
-            if let idx = model.currentIndex, idx + 1 < model.visibleItems.count {
-                let next = model.visibleItems[idx + 1].url
-                _ = await FullImageCache.shared.image(for: next)
+    /// Chrome shows on any mouse movement and hides again after two idle
+    /// seconds (unless the pointer rests on a control), Preview-style.
+    private func showChrome() {
+        if !chromeVisible { chromeVisible = true }
+        hideChromeTask?.cancel()
+        hideChromeTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, !overChrome else { return }
+            chromeVisible = false
+            NSCursor.setHiddenUntilMouseMoves(true)
+        }
+    }
+
+    private var filmstrip: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 6) {
+                    ForEach(model.visibleItems) { thumb in
+                        FilmstripThumb(item: thumb, isCurrent: thumb.id == model.selection)
+                            .id(thumb.id)
+                            .onTapGesture {
+                                navigate { model.select(thumb.id) }
+                            }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
-            if let idx = model.currentIndex, idx > 0, idx - 1 < model.visibleItems.count {
-                let previous = model.visibleItems[idx - 1].url
-                _ = await FullImageCache.shared.image(for: previous)
+            .frame(height: 68)
+            .glassEffect(.regular, in: .rect(cornerRadius: 14))
+            .onChange(of: model.selection) { _, id in
+                guard let id else { return }
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
+            .onAppear {
+                if let id = model.selection { proxy.scrollTo(id, anchor: .center) }
             }
         }
     }
@@ -113,6 +189,7 @@ struct FullscreenView: View {
             .pickerStyle(.inline)
             Divider()
             Toggle("Loop", isOn: $loops)
+            Toggle("Shuffle", isOn: $shuffle)
         } label: {
             Image(systemName: "timer")
                 .font(.title3)
@@ -145,6 +222,47 @@ struct FullscreenView: View {
             .glassEffect(.regular, in: .capsule)
     }
 
+    // MARK: - Navigation
+
+    /// Manual navigation during a slideshow restarts its timer, so the next
+    /// automatic advance comes a full interval after the interaction.
+    @discardableResult
+    private func navigate(_ move: () -> Void) -> KeyPress.Result {
+        move()
+        if isPlaying { startSlideshow() }
+        return .handled
+    }
+
+    /// Trackpad two-finger swipes and mouse back/forward buttons page through
+    /// the photos — SwiftUI exposes neither, so a local monitor fills in.
+    private func installEventMonitor() {
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.swipe, .otherMouseUp]) { event in
+            switch event.type {
+            case .swipe where event.deltaX > 0:
+                navigate { model.move(by: -1) }
+                return nil
+            case .swipe where event.deltaX < 0:
+                navigate { model.move(by: 1) }
+                return nil
+            case .otherMouseUp where event.buttonNumber == 3:
+                navigate { model.move(by: -1) }
+                return nil
+            case .otherMouseUp where event.buttonNumber == 4:
+                navigate { model.move(by: 1) }
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeEventMonitor() {
+        if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+        eventMonitor = nil
+    }
+
+    // MARK: - Slideshow
+
     private func toggleSlideshow() {
         if isPlaying { stopSlideshow() } else { startSlideshow() }
     }
@@ -154,6 +272,9 @@ struct FullscreenView: View {
         NSCursor.setHiddenUntilMouseMoves(true)
         slideshowTask?.cancel()
         slideshowTask = Task { @MainActor [weak model = model] in
+            // Shuffle plays every image exactly once per pass in random order.
+            var shuffleQueue: [ImageItem.ID] = []
+            var playedFullPass = false
             while !Task.isCancelled {
                 // Read settings each round so changes apply mid-slideshow.
                 let defaults = UserDefaults.standard
@@ -161,15 +282,30 @@ struct FullscreenView: View {
                 try? await Task.sleep(for: .seconds(stored > 0 ? stored : 4.0))
                 if Task.isCancelled { break }
                 guard let model else { break }
-                let atEnd = (model.currentIndex ?? 0) >= model.visibleItems.count - 1
-                if atEnd {
-                    guard defaults.bool(forKey: "slideshowLoop"),
-                          model.visibleItems.count > 1 else { break }
+                let looping = defaults.bool(forKey: "slideshowLoop")
+
+                if defaults.bool(forKey: "slideshowShuffle") {
+                    if shuffleQueue.isEmpty {
+                        if playedFullPass, !looping { break }
+                        shuffleQueue = model.visibleItems.map(\.id).shuffled()
+                            .filter { $0 != model.selection }
+                        playedFullPass = true
+                        guard !shuffleQueue.isEmpty else { break }
+                    }
+                    let next = shuffleQueue.removeFirst()
+                    guard model.visibleItems.contains(where: { $0.id == next }) else { continue }
                     NSCursor.setHiddenUntilMouseMoves(true)
-                    model.selectFirst()
+                    model.selection = next
                 } else {
-                    NSCursor.setHiddenUntilMouseMoves(true)
-                    model.move(by: 1)
+                    let atEnd = (model.currentIndex ?? 0) >= model.visibleItems.count - 1
+                    if atEnd {
+                        guard looping, model.visibleItems.count > 1 else { break }
+                        NSCursor.setHiddenUntilMouseMoves(true)
+                        model.selectFirst()
+                    } else {
+                        NSCursor.setHiddenUntilMouseMoves(true)
+                        model.move(by: 1)
+                    }
                 }
             }
             self.isPlaying = false
@@ -180,5 +316,36 @@ struct FullscreenView: View {
         isPlaying = false
         slideshowTask?.cancel()
         slideshowTask = nil
+    }
+}
+
+/// One thumbnail in the fullscreen filmstrip.
+private struct FilmstripThumb: View {
+    let item: ImageItem
+    let isCurrent: Bool
+    @Environment(\.displayScale) private var scale
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(.white.opacity(0.08))
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 52, height: 52)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+        }
+        .frame(width: 52, height: 52)
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(isCurrent ? Color.white : .clear, lineWidth: 2)
+        )
+        .help(item.name)
+        .task(id: "\(item.id.path)|\(item.modifiedAt.timeIntervalSince1970)") {
+            image = await ImageLoading.thumbnail(for: item, pixelSize: 128, scale: scale)
+        }
     }
 }

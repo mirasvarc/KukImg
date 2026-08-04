@@ -18,10 +18,17 @@ struct SettingsView: View {
 }
 
 private struct GeneralSettingsView: View {
+    // Subfolder inclusion and grouping live on the model (they trigger a
+    // rescan), so they are bound through it rather than through @AppStorage —
+    // two writers on the same key would drift apart.
+    @Environment(AppModel.self) private var model
     @AppStorage("restoreLastFolder") private var restoreLastFolder = true
     @AppStorage("showFilenames") private var showFilenames = false
+    @AppStorage("hideEmptyFolders") private var hideEmptyFolders = false
     @AppStorage("slideshowInterval") private var slideshowInterval = 4.0
     @AppStorage("slideshowLoop") private var slideshowLoop = false
+    @AppStorage("slideshowShuffle") private var slideshowShuffle = false
+    @AppStorage("systemFullscreen") private var systemFullscreen = false
 
     private static let intervals: [Double] = [2, 4, 8, 15]
 
@@ -32,6 +39,27 @@ private struct GeneralSettingsView: View {
             }
             Section("Browsing") {
                 Toggle("Show filenames under thumbnails", isOn: $showFilenames)
+                Toggle("Include images from subfolders", isOn: Binding(
+                    get: { model.includeSubfolders },
+                    set: { model.includeSubfolders = $0 }
+                ))
+                Toggle("Group them by folder in the grid", isOn: Binding(
+                    get: { model.groupByFolder },
+                    set: { model.groupByFolder = $0 }
+                ))
+                .disabled(!model.includeSubfolders)
+            }
+            Section("Sidebar") {
+                Toggle("Hide folders without images", isOn: $hideEmptyFolders)
+                Text("Folders whose subfolders contain images stay visible.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Viewer") {
+                Toggle("Use macOS full screen for the immersive view", isOn: $systemFullscreen)
+                Text("Opening the viewer (Return or double-click) also takes the window into full screen.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Slideshow") {
                 Picker("Interval", selection: $slideshowInterval) {
@@ -40,6 +68,7 @@ private struct GeneralSettingsView: View {
                     }
                 }
                 Toggle("Loop at the end", isOn: $slideshowLoop)
+                Toggle("Shuffle order", isOn: $slideshowShuffle)
             }
         }
         .formStyle(.grouped)

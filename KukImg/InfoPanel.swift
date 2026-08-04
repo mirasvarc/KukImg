@@ -3,7 +3,11 @@ import AppKit
 
 struct InfoPanel: View {
     let item: ImageItem
+    @Environment(\.displayScale) private var scale
     @State private var meta: ImageMetadata?
+    @State private var histogram: Histogram?
+    @State private var showAllMetadata = false
+    @State private var allSections: [MetadataSection] = []
 
     var body: some View {
         ScrollView {
@@ -24,6 +28,13 @@ struct InfoPanel: View {
                     if let color = meta?.colorModel {
                         row("Color", color)
                     }
+                }
+
+                if let histogram {
+                    Divider()
+                    HistogramView(histogram: histogram)
+                        .frame(height: 56)
+                        .help("RGB histogram")
                 }
 
                 if hasCameraInfo {
@@ -55,6 +66,26 @@ struct InfoPanel: View {
                     }
                 }
 
+                if fileAvailable {
+                    Divider()
+                    DisclosureGroup("All Metadata", isExpanded: $showAllMetadata) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(allSections) { section in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(section.name)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    ForEach(section.entries) { entry in
+                                        row(entry.key, entry.value)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
+                    .font(.caption)
+                }
+
                 Spacer(minLength: 0)
             }
             .padding(14)
@@ -62,9 +93,37 @@ struct InfoPanel: View {
         }
         .frame(width: 240)
         .background(.regularMaterial)
-        .task(id: item.id) {
-            self.meta = await MetadataCache.shared.metadata(for: item.url)
+        .task(id: item) {
+            meta = nil
+            histogram = nil
+            allSections = []
+            // Never materializes a Photos asset — PhotoKit answers dimensions,
+            // date and GPS directly; full EXIF appears once a file exists.
+            self.meta = await ImageLoading.metadata(for: item)
+            if let thumb = await ImageLoading.thumbnail(for: item, pixelSize: 256, scale: scale),
+               !Task.isCancelled {
+                histogram = HistogramBuilder.build(from: thumb)
+            }
+            if showAllMetadata { await loadAllMetadata() }
         }
+        .onChange(of: showAllMetadata) { _, expanded in
+            guard expanded, allSections.isEmpty else { return }
+            Task { await loadAllMetadata() }
+        }
+    }
+
+    /// The raw property dump needs a real file; un-materialized Photos assets
+    /// only get it after something exports them (opening the photo suffices).
+    private var fileAvailable: Bool {
+        FileManager.default.fileExists(atPath: item.url.path)
+    }
+
+    private func loadAllMetadata() async {
+        guard fileAvailable else { return }
+        let url = item.url
+        allSections = await Task.detached(priority: .userInitiated) {
+            MetadataReader.allMetadata(url: url)
+        }.value
     }
 
     private func openInMaps(latitude: Double, longitude: Double) {
@@ -96,5 +155,46 @@ struct InfoPanel: View {
             Spacer(minLength: 8)
             Text(value).font(.caption).multilineTextAlignment(.trailing).lineLimit(2)
         }
+        .contextMenu {
+            Button("Copy Value") { copyToPasteboard(value) }
+            Button("Copy \"\(label): \(value)\"") { copyToPasteboard("\(label): \(value)") }
+        }
+    }
+
+    private func copyToPasteboard(_ string: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(string, forType: .string)
+    }
+}
+
+/// Filled RGB curves, overlaid with partial opacity like every photo editor.
+struct HistogramView: View {
+    let histogram: Histogram
+
+    var body: some View {
+        Canvas { context, size in
+            for (bins, color) in [
+                (histogram.red, Color.red),
+                (histogram.green, Color.green),
+                (histogram.blue, Color.blue)
+            ] {
+                context.fill(path(for: bins, in: size), with: .color(color.opacity(0.45)))
+            }
+        }
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func path(for bins: [CGFloat], in size: CGSize) -> Path {
+        var path = Path()
+        guard bins.count > 1 else { return path }
+        path.move(to: CGPoint(x: 0, y: size.height))
+        for (index, value) in bins.enumerated() {
+            let x = size.width * CGFloat(index) / CGFloat(bins.count - 1)
+            path.addLine(to: CGPoint(x: x, y: size.height * (1 - value)))
+        }
+        path.addLine(to: CGPoint(x: size.width, y: size.height))
+        path.closeSubpath()
+        return path
     }
 }

@@ -8,6 +8,8 @@
 	<string>UPg5yEP2uVDXExP4ms70HVZN97UUBVEleB/w+SRSGZ4=</string>
 	<key>SUEnableInstallerLauncherService</key>
 	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Kuk shows the albums from your Photos library so you can browse, share and convert those images.</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

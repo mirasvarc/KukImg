@@ -32,10 +32,12 @@ actor ThumbnailCache {
         return c
     }()
 
-    func thumbnail(for url: URL, pixelSize: CGFloat, scale: CGFloat) async -> NSImage? {
+    /// `modifiedAt` is part of the cache key, so a file overwritten on disk
+    /// gets a fresh thumbnail after the next rescan instead of a stale one.
+    func thumbnail(for url: URL, modifiedAt: Date, pixelSize: CGFloat, scale: CGFloat) async -> NSImage? {
         let bucket = Self.bucket(for: pixelSize)
         let cache = bucket > 512 ? previews : thumbs
-        let key = "\(url.path)|\(Int(bucket))|\(Int(scale))" as NSString
+        let key = "\(url.path)|\(modifiedAt.timeIntervalSince1970)|\(Int(bucket))|\(Int(scale))" as NSString
         if let cached = cache.object(forKey: key) { return cached }
         if Task.isCancelled { return nil }
 
@@ -44,7 +46,7 @@ actor ThumbnailCache {
             generated = await Self.imageIOOffActor(url: url, pixelSize: bucket * scale)
         }
         guard let img = generated else { return nil }
-        cache.setObject(img, forKey: key, cost: Self.cost(of: img))
+        cache.setObject(img, forKey: key, cost: img.estimatedByteCost)
         return img
     }
 
@@ -93,8 +95,14 @@ actor ThumbnailCache {
         return NSImage(cgImage: cg, size: .zero)
     }
 
-    private static func cost(of image: NSImage) -> Int {
-        let s = image.size
-        return Int(s.width * s.height * 4)
+}
+
+nonisolated extension NSImage {
+    /// Approximate decoded size in bytes for NSCache cost accounting. Uses the
+    /// representations' real pixel dimensions — `size` is in points, which
+    /// undercounts Retina bitmaps 4×.
+    var estimatedByteCost: Int {
+        let pixels = representations.reduce(0) { max($0, $1.pixelsWide * $1.pixelsHigh) }
+        return pixels > 0 ? pixels * 4 : Int(size.width * size.height * 4)
     }
 }

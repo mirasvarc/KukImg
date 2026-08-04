@@ -14,9 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openPending() {
-        guard let model, let url = pendingURLs.last else { return }
+        guard let model, !pendingURLs.isEmpty else { return }
+        let urls = pendingURLs
         pendingURLs.removeAll()
-        model.handleDrop(url)
+        for url in urls { model.handleDrop(url) }
     }
 }
 
@@ -39,6 +40,11 @@ struct KukImgApp: App {
                 .task {
                     appDelegate.model = model
                     model.restoreLastFolder()
+                    // Exported Photos copies pile up over time; prune them once
+                    // per launch, off the main thread.
+                    Task.detached(priority: .background) {
+                        PhotosMaterializer.trimCache()
+                    }
                 }
         }
         .windowToolbarStyle(.unified)
@@ -72,6 +78,25 @@ struct KukImgApp: App {
                 Button("Show in Finder") { model.revealCurrent() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(model.currentItem == nil)
+                Divider()
+                Button("Select All") { model.selectAll() }
+                    .keyboardShortcut("a", modifiers: .command)
+                    .disabled(model.visibleItems.isEmpty)
+                Button("Deselect") { model.collapseSelection() }
+                    .disabled(!model.hasMultipleSelected)
+                Toggle("Selection Mode", isOn: Binding(
+                    get: { model.isSelectMode },
+                    set: { model.isSelectMode = $0 }
+                ))
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
+            CommandGroup(after: .importExport) {
+                Button(shareLabel) { model.shareCurrent() }
+                    .keyboardShortcut("s", modifiers: [.command, .option])
+                    .disabled(model.currentItem == nil)
+                Button(convertLabel) { model.convertCurrent() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(model.currentItem == nil)
             }
             CommandGroup(before: .toolbar) {
                 Button("Zoom In") { model.requestZoom(.zoomIn) }
@@ -88,6 +113,38 @@ struct KukImgApp: App {
                     .disabled(zoomUnavailable)
                 Divider()
                 Toggle("Show Filenames", isOn: $showFilenames)
+                Toggle("Group by Folder", isOn: Binding(
+                    get: { model.groupByFolder },
+                    set: { model.groupByFolder = $0 }
+                ))
+                .disabled(!model.includeSubfolders)
+            }
+            CommandMenu("Image") {
+                Button("Rotate Left") { model.rotateCurrent(clockwise: false) }
+                    .keyboardShortcut("l", modifiers: .command)
+                    .disabled(model.currentItem == nil)
+                Button("Rotate Right") { model.rotateCurrent(clockwise: true) }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(model.currentItem == nil)
+                Button("Rename…") { model.renameCurrent() }
+                    .keyboardShortcut("r", modifiers: [.command, .option])
+                    .disabled(model.currentItem == nil)
+                Divider()
+                // Flag keys (P / X / U) live in the grid and fullscreen views;
+                // bare-letter menu shortcuts would swallow typing in search.
+                Button("Pick (P)") { model.setFlag(.pick, for: model.selectedItems) }
+                    .disabled(model.currentItem == nil)
+                Button("Reject (X)") { model.setFlag(.reject, for: model.selectedItems) }
+                    .disabled(model.currentItem == nil)
+                Button("Clear Flag (U)") { model.setFlag(nil, for: model.selectedItems) }
+                    .disabled(model.currentItem == nil)
+                Divider()
+                Button("Copy Picked to Folder…") { model.exportPicked(move: false) }
+                    .disabled(!model.hasPickedInCurrent)
+                Button("Move Picked to Folder…") { model.exportPicked(move: true) }
+                    .disabled(!model.hasPickedInCurrent)
+                Button("Move Rejected to Trash") { model.trashRejected() }
+                    .disabled(!model.hasRejectedInCurrent)
             }
             CommandMenu("Sort") {
                 ForEach(SortOrder.allCases, id: \.self) { order in
@@ -111,11 +168,21 @@ struct KukImgApp: App {
 
         Settings {
             SettingsView(updater: updaterController.updater)
+                .environment(model)
         }
     }
 
-    /// Zoom acts on the detail view, which is idle while fullscreen is up.
+    /// Zoom commands go to the fullscreen viewer when it is up, otherwise to
+    /// the detail view — each consumes `zoomRequest` behind its own gate.
     private var zoomUnavailable: Bool {
-        model.currentItem == nil || model.isFullscreen
+        model.currentItem == nil
+    }
+
+    private var shareLabel: String {
+        model.hasMultipleSelected ? "Share \(model.selectedIDs.count) Images…" : "Share…"
+    }
+
+    private var convertLabel: String {
+        model.hasMultipleSelected ? "Convert \(model.selectedIDs.count) Images…" : "Convert…"
     }
 }
