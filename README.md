@@ -21,11 +21,12 @@ Designed for flipping through large folders of photos with zero friction — thu
 ## Features
 
 - **Fast grid browsing** — lazy grid with quantized thumbnail sizes, adjustable via a toolbar slider; thumbnails are served from a memory cache backed by QuickLook (the same cache Finder uses) with an ImageIO fallback
-- **Instant navigation** — neighboring images are prefetched around the selection, and prefetches/decodes that fall out of view are cancelled, so holding an arrow key stays smooth even in huge folders
-- **Detail view** — fit-to-window by default, pinch to zoom, double-click to toggle fit ↔ 100 %, zoom shortcuts (⌘+/⌘−/⌘1/⌘0), progressive loading (instant preview → display-size decode → full native decode only when zoom needs it), animated GIF playback, EXIF orientation handled correctly
-- **Apple Photos library** — browse All Photos, Favorites, Recents and your albums straight from the sidebar (read-only); originals are exported to a size-capped cache on demand, so viewing stays instant and sharing/converting works on real files
+- **Instant navigation** — photos are decoded at the size of the viewer (not their native resolution), neighbors are prefetched in the direction you browse, a photo already in memory appears without any delay, and prefetches that fall out of view are cancelled, so holding an arrow key stays smooth even in folders with thousands of images
+- **RAW friendly** — camera RAW files are shown from their embedded full-size preview while browsing; the raw data is only developed when you zoom in past it
+- **Detail view** — fit-to-window by default, pinch to zoom, double-click to toggle fit ↔ 100 %, zoom shortcuts (⌘+/⌘−/⌘1/⌘0), progressive loading (instant preview → viewer-size decode → full native decode only when zoom needs it), animated GIF, APNG and WebP playback, EXIF orientation handled correctly
+- **Apple Photos library** — browse All Photos, Favorites, Recents and your albums straight from the sidebar (read-only); photos are rendered by PhotoKit at screen size, edits made in Photos are shown, the album updates when the library changes, and originals are exported to a size-capped cache only for sharing, converting or deep zoom
 - **Fullscreen mode** — distraction-free viewing with a slideshow (adjustable interval, optional loop, neighbors preloaded, cursor auto-hidden)
-- **Culling** — flag images as Pick (P) or Reject (X), clear with U; filter the grid by flag, copy or move all picked images to a folder, send all rejected to Trash
+- **Culling** — flag images as Pick (P) or Reject (X), clear with U; filter the grid by flag, copy or move all picked images to a folder (in the background, with progress), send all rejected to Trash. Flags are saved as green "Pick" and red "Reject" Finder tags, so they survive quitting, travel with the files and are searchable in Finder and Spotlight (Photos items keep theirs inside Kuk)
 - **Multi-selection** — ⇧/⌘-click, ⌘A, or an iPhone-style Selection Mode (⇧⌘S) with checkboxes; share, convert, copy, trash and rename act on the whole selection
 - **Convert** (⇧⌘E) — batch conversion to PNG, JPEG, HEIC, TIFF, WebP, GIF or BMP with adjustable quality
 - **Rename** (⌘⌥R) — single rename or batch rename with a numbered pattern (`Trip-###` → Trip-001, Trip-002, …)
@@ -36,6 +37,7 @@ Designed for flipping through large folders of photos with zero friction — thu
 - **Finder integration** — drag & drop a folder (or a single image) in, drag images out, reveal in Finder, copy (file + bitmap), Open With menu, move to Trash with Undo
 - **Open With** — registers as a viewer for images and folders, so it appears in Finder's Open With menu and can be set as the default image viewer (Get Info → Open with → Change All…)
 - **Folder tree** — sidebar shows each open folder as a lazily loaded tree of its subfolders with per-folder image counts; multiple folders can be open at once (Add Folder… button, multi-select in the open panel) and closed individually
+- **Folder navigation** — jump to the next or previous folder that contains images (⌥⌘↓ / ⌥⌘↑) and to the enclosing folder (⌘↑) straight from the keyboard, also in fullscreen; the sidebar follows along
 - **Settings** (⌘,) — startup, thumbnail and slideshow options, plus app info and update check
 - **Recent folders** — sidebar and File → Open Recent, restored across launches via security-scoped bookmarks (the app is sandboxed); individual entries removable from the sidebar
 - **Localized** — English and Czech
@@ -47,10 +49,12 @@ Designed for flipping through large folders of photos with zero friction — thu
 |---|---|
 | ← → ↑ ↓ | Move selection (grid: by row/column) |
 | Home / End | First / last image |
-| Page Up / Page Down | Move by one screen of rows |
+| Page Up / Page Down | Move by one screen of rows (fullscreen: previous / next image) |
+| ⌥⌘↓ / ⌥⌘↑ | Next / previous folder with images |
+| ⌘↑ | Enclosing folder |
 | Return / Space | Open fullscreen |
 | Esc | Leave fullscreen / collapse selection |
-| Space / P (fullscreen) | Toggle slideshow |
+| Space (fullscreen) | Toggle slideshow |
 | P / X / U | Pick / Reject / Clear flag |
 | ⌫, ⌘⌫ | Move to Trash |
 | ⌘Z | Undo Move to Trash |
@@ -101,8 +105,10 @@ Build and run the `KukImg` scheme (⌘R). The only dependency is [Sparkle](https
 - `AppModel` — single `@Observable` model: folder scanning, selection & multi-selection, filtering, sorting, grouping, culling flags, folder watching, prefetch orchestration, trash with undo
 - `PhotosLibraryModel` / `PhotosMaterializer` — Photos albums as lightweight items; originals are exported to an LRU-trimmed cache only when something needs a real file
 - `ImageLoading` — one façade over both origins (files and Photos assets) for thumbnails, previews, full decodes and metadata
-- `ThumbnailCache` — actor with separate NSCaches for grid thumbnails and large previews; requests are quantized into size buckets and fully cancellable
-- `FullImageCache` — small LRU of fully decoded images so stepping back is instant
+- `ThumbnailCache` — one actor for thumbnails of files (QuickLook, ImageIO fallback) and Photos assets (PhotoKit); requests are quantized into size buckets, concurrent requests for the same thumbnail share one generation, and a generation is cancelled once nobody waits for it
+- `FullImageCache` / `DecodeTier` — decodes sized to the viewport in 512 px steps (a bigger cached decode serves a smaller request), RAW embedded previews, shared in-flight decodes
+- `FolderNavigator` — depth-first walk of the open folder trees for next/previous folder
+- `FinderTags` / `AssetFlagStore` — culling flags persisted as coloured Finder tags, or in the app's defaults for Photos items
 - `MetadataCache` — deduplicated EXIF reads shared by the status bar and info panel
 - `PhotoCanvas` — shared image surface of the detail and fullscreen views: progressive loading, zoom & pan (NSScrollView-backed), neighbor prefetching
 - All decoding runs off the main thread and respects task cancellation

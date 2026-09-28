@@ -3,7 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.undoManager) private var undoManager
-    @State private var thumbSize: CGFloat = 160
+    @AppStorage("thumbSize") private var thumbSize: Double = 160
     @AppStorage("showFilenames") private var showFilenames = false
     @AppStorage("systemFullscreen") private var systemFullscreen = false
 
@@ -21,7 +21,11 @@ struct ContentView: View {
             .toolbar { toolbar }
             .searchable(text: $model.filterText, placement: .toolbar, prompt: "Filter by name")
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                StatusBar(item: model.currentItem, selectedCount: model.selectedIDs.count)
+                StatusBar(
+                    item: model.currentItem,
+                    selectedCount: model.selectedIDs.count,
+                    activity: model.activity
+                )
             }
             .dropDestination(for: URL.self) { urls, _ in
                 guard !urls.isEmpty else { return false }
@@ -29,8 +33,10 @@ struct ContentView: View {
                 return true
             }
 
-            if model.isFullscreen, let item = model.currentItem {
-                FullscreenView(item: item)
+            // Stays up (without an item) while folder navigation loads the
+            // next folder, so the slideshow and chrome state carry over.
+            if model.isFullscreen {
+                FullscreenView(item: model.currentItem)
                     .transition(.opacity)
                     .zIndex(1)
             }
@@ -66,6 +72,8 @@ struct ContentView: View {
                 Picker("Sort By", selection: sortBinding) {
                     ForEach(SortOrder.allCases, id: \.self) { order in
                         Text(order.label).tag(order)
+                            // Photos assets report no file size.
+                            .disabled(order.isSizeBased && model.photoAlbum != nil)
                     }
                 }
                 .pickerStyle(.inline)
@@ -123,14 +131,15 @@ struct ContentView: View {
             .disabled(model.currentItem == nil)
         }
         ToolbarItem(placement: .primaryAction) {
-            Slider(value: $thumbSize, in: 80...320)
+            Slider(value: $thumbSize, in: 80...360)
                 .frame(width: 140)
                 .help("Thumbnail size")
         }
     }
 
     private var shareHelp: String {
-        model.selectedIDs.count > 1 ? "Share \(model.selectedIDs.count) images" : "Share"
+        let count = model.selectedIDs.count
+        return count > 1 ? String(localized: "Share \(count) images") : String(localized: "Share")
     }
 
     private var sortBinding: Binding<SortOrder> {
@@ -154,6 +163,22 @@ struct ContentView: View {
     }
 
     private var sidebar: some View {
+        ScrollViewReader { proxy in
+            sidebarList
+                // Folder navigation lands on folders that may be far down the
+                // tree; keep the highlighted row in view.
+                .onChange(of: model.folder) { _, folder in
+                    guard let path = folder?.path else { return }
+                    Task {
+                        // Let freshly expanded rows appear first.
+                        try? await Task.sleep(for: .milliseconds(80))
+                        withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(path) }
+                    }
+                }
+        }
+    }
+
+    private var sidebarList: some View {
         List {
             if !model.openFolders.isEmpty {
                 Section("Folders") {
@@ -213,14 +238,17 @@ struct ContentView: View {
     }
 
     private var countLabel: String {
-        var text = model.visibleItems.count == model.items.count
-            ? "\(model.items.count) images"
-            : "\(model.visibleItems.count) of \(model.items.count) images"
-        if let total = model.photos.truncatedFrom, model.photoAlbum != nil {
-            text += " of \(total) in the album"
+        let shown = model.visibleItems.count
+        let total = model.items.count
+        var text = shown == total
+            ? String(localized: "\(total) images")
+            : String(localized: "\(shown) of \(total) images")
+        if let albumTotal = model.photos.truncatedFrom, model.photoAlbum != nil {
+            text += " " + String(localized: "of \(albumTotal) in the album")
         }
-        if model.selectedIDs.count > 1 {
-            text += " · \(model.selectedIDs.count) selected"
+        let selected = model.selectedIDs.count
+        if selected > 1 {
+            text += " · " + String(localized: "\(selected) selected")
         }
         return text
     }
@@ -236,27 +264,31 @@ struct ContentView: View {
                     description: Text(emptyDescription)
                 )
             } else {
-                ImageGridView(thumbSize: thumbSize)
+                ImageGridView(thumbSize: CGFloat(thumbSize))
             }
         }
         .frame(minWidth: 400)
     }
 
     private var emptyDescription: String {
-        if model.folder == nil && model.photoAlbum == nil {
-            "Choose a folder via ⌘O or drop one here."
-        } else if !model.filterText.isEmpty {
-            "No images match “\(model.filterText)”."
+        let filter = model.filterText
+        return if model.folder == nil && model.photoAlbum == nil {
+            String(localized: "Choose a folder via ⌘O or drop one here.")
+        } else if !filter.isEmpty {
+            String(localized: "No images match “\(filter)”.")
+        } else if model.flagFilter != .all {
+            String(localized: "No images with this flag.")
         } else if model.photoAlbum != nil {
-            "This album has no images."
+            String(localized: "This album has no images.")
         } else {
-            "This folder has no images."
+            String(localized: "This folder has no images.")
         }
     }
 
     private var detail: some View {
         Group {
-            if let item = model.currentItem {
+            // Hidden under fullscreen, so the two viewers don't both decode.
+            if let item = model.currentItem, !model.isFullscreen {
                 DetailView(item: item)
             } else {
                 ContentUnavailableView("No Selection", systemImage: "photo")

@@ -4,7 +4,8 @@ import AppKit
 struct FullscreenView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.displayScale) private var scale
-    let item: ImageItem
+    /// Nil while the next folder loads (folder navigation keeps fullscreen up).
+    let item: ImageItem?
 
     @State private var zoomMode: ZoomMode = .fit
     @State private var pixelSize: CGSize?
@@ -31,13 +32,17 @@ struct FullscreenView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            PhotoCanvas(
-                item: item,
-                zoomMode: $zoomMode,
-                pixelSize: $pixelSize,
-                backgroundColor: .black
-            )
-            .ignoresSafeArea()
+            if let item {
+                PhotoCanvas(
+                    item: item,
+                    zoomMode: $zoomMode,
+                    pixelSize: $pixelSize,
+                    backgroundColor: .black
+                )
+                .ignoresSafeArea()
+            } else {
+                ProgressView().tint(.white)
+            }
             chrome
         }
         .ignoresSafeArea()
@@ -59,20 +64,28 @@ struct FullscreenView: View {
             hideChromeTask?.cancel()
             removeEventMonitor()
         }
-        .onKeyPress(.leftArrow)  { navigate { model.move(by: -1) } }
-        .onKeyPress(.rightArrow) { navigate { model.move(by:  1) } }
-        .onKeyPress(.upArrow)    { navigate { model.move(by: -1) } }
-        .onKeyPress(.downArrow)  { navigate { model.move(by:  1) } }
+        // ⌘/⌥ arrows belong to the Go menu (folder navigation).
+        .onKeyPress(keys: [.leftArrow, .upArrow, .pageUp]) { press in
+            guard !press.modifiers.hasMenuModifier else { return .ignored }
+            return navigate { model.move(by: -1) }
+        }
+        .onKeyPress(keys: [.rightArrow, .downArrow, .pageDown]) { press in
+            guard !press.modifiers.hasMenuModifier else { return .ignored }
+            return navigate { model.move(by: 1) }
+        }
         .onKeyPress(.home)       { navigate { model.selectFirst() } }
         .onKeyPress(.end)        { navigate { model.selectLast() } }
         .onKeyPress(.escape)     { model.isFullscreen = false; return .handled }
         .onKeyPress(.return)     { model.isFullscreen = false; return .handled }
         .onKeyPress(.space)      { toggleSlideshow(); return .handled }
-        .onKeyPress("p")         { model.setFlag(.pick, for: [item]); return .handled }
-        .onKeyPress("x")         { model.setFlag(.reject, for: [item]); return .handled }
-        .onKeyPress("u")         { model.setFlag(nil, for: [item]); return .handled }
+        .onKeyPress("p")         { flag(.pick) }
+        .onKeyPress("x")         { flag(.reject) }
+        .onKeyPress("u")         { flag(nil) }
         // Only the image on screen — never a wider selection made in the grid.
-        .onKeyPress(.delete)     { model.delete([item]); return .handled }
+        .onKeyPress(.delete) {
+            if let item { model.delete([item]) }
+            return .handled
+        }
         .onChange(of: model.zoomRequest) { _, request in
             guard let request else { return }
             zoomMode = math.apply(request.command, to: zoomMode)
@@ -86,7 +99,7 @@ struct FullscreenView: View {
             HStack {
                 Spacer()
                 chromeButton(systemName: "square.and.arrow.up") {
-                    Sharing.share([item])
+                    if let item { Sharing.share([item]) }
                 }
                 slideshowSettingsMenu
                 chromeButton(systemName: isPlaying ? "pause.fill" : "play.fill") {
@@ -106,8 +119,10 @@ struct FullscreenView: View {
                     filmstrip
                 }
                 HStack {
-                    chromeLabel { Text(item.name) }
-                    if let flag = model.flag(for: item) {
+                    if let item {
+                        chromeLabel { Text(item.name) }
+                    }
+                    if let item, let flag = model.flag(for: item) {
                         chromeLabel {
                             Label(
                                 flag == .pick ? "Picked" : "Rejected",
@@ -223,6 +238,11 @@ struct FullscreenView: View {
     }
 
     // MARK: - Navigation
+
+    private func flag(_ flag: ImageFlag?) -> KeyPress.Result {
+        if let item { model.setFlag(flag, for: [item]) }
+        return .handled
+    }
 
     /// Manual navigation during a slideshow restarts its timer, so the next
     /// automatic advance comes a full interval after the interaction.
@@ -345,7 +365,7 @@ private struct FilmstripThumb: View {
         )
         .help(item.name)
         .task(id: "\(item.id.path)|\(item.modifiedAt.timeIntervalSince1970)") {
-            image = await ImageLoading.thumbnail(for: item, pixelSize: 128, scale: scale)
+            image = await ImageLoading.thumbnail(for: item, pointSize: 128, scale: scale)
         }
     }
 }

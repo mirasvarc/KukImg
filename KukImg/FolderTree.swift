@@ -10,7 +10,6 @@ struct FolderTreeRow: View {
     let url: URL
     let isRoot: Bool
 
-    @State private var isExpanded = false
     @State private var info: FolderInfo?
     @AppStorage("hideEmptyFolders") private var hideEmptyFolders = false
 
@@ -35,7 +34,7 @@ struct FolderTreeRow: View {
             if info != nil, visibleSubfolders.isEmpty {
                 label
             } else {
-                DisclosureGroup(isExpanded: $isExpanded) {
+                DisclosureGroup(isExpanded: expandedBinding) {
                     ForEach(visibleSubfolders, id: \.self) { sub in
                         FolderTreeRow(url: sub.url, isRoot: false)
                     }
@@ -54,9 +53,22 @@ struct FolderTreeRow: View {
             guard open else { return }
             Task { info = await Self.scan(url, deep: hideEmptyFolders) }
         }
+        .id(url.path)
     }
 
     private var isCurrent: Bool { model.folder?.path == url.path }
+
+    /// Expansion lives in the model so folder navigation can reveal a folder.
+    private var isExpanded: Bool { model.expandedPaths.contains(url.path) }
+
+    private var expandedBinding: Binding<Bool> {
+        Binding(
+            get: { model.expandedPaths.contains(url.path) },
+            set: { open in
+                if open { model.expandedPaths.insert(url.path) } else { model.expandedPaths.remove(url.path) }
+            }
+        )
+    }
 
     private var label: some View {
         Button {
@@ -158,7 +170,7 @@ actor FolderIndex {
         }
         if let running = inFlight[url] { return await running.value }
 
-        let task = Task.detached(priority: .utility) { Self.probe(url) }
+        let task = Task.detached(priority: .utility) { Self.subtreeContainsImages(url) }
         inFlight[url] = task
         let result = await task.value
         inFlight[url] = nil
@@ -169,7 +181,7 @@ actor FolderIndex {
     /// Walks the subtree and stops at the first image. Deliberately gives up
     /// after a large number of entries and answers "yes" rather than stalling
     /// the sidebar on a pathological directory.
-    nonisolated private static func probe(_ url: URL) -> Bool {
+    nonisolated static func subtreeContainsImages(_ url: URL) -> Bool {
         let keys: [URLResourceKey] = [.isRegularFileKey, .contentTypeKey]
         guard let enumerator = FileManager.default.enumerator(
             at: url,

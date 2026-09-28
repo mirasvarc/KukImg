@@ -24,7 +24,7 @@ struct RenameSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(isBatch ? "Rename \(items.count) Images" : "Rename Image")
                         .font(.headline)
-                    Text(isBatch ? "A run of # becomes a counter." : items[0].name)
+                    Text(isBatch ? String(localized: "A run of # becomes a counter.") : items[0].name)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -70,26 +70,22 @@ struct RenameSheet: View {
         .frame(width: 420)
         .onAppear {
             name = items[0].url.deletingPathExtension().lastPathComponent
-            pattern = "\(model.sourceTitle ?? "Image")-###"
+            pattern = "\(model.sourceTitle ?? String(localized: "Image"))-###"
             fieldFocused = true
         }
     }
 
+    /// The same naming the rename itself uses, for the first file.
     private var batchPreview: String {
-        let hashes = pattern.filter { $0 == "#" }.count
-        let number = String(format: "%0\(max(hashes, 1))d", start)
-        let base = hashes > 0
-            ? pattern.replacingOccurrences(of: String(repeating: "#", count: hashes), with: number)
-            : "\(pattern)-\(number)"
-        let ext = items[0].url.pathExtension
-        return ext.isEmpty ? base : "\(base).\(ext)"
+        RenamePattern.plan([items[0].url], pattern: pattern, start: start)
+            .first?.destination.lastPathComponent ?? ""
     }
 
     private func perform() {
         if isBatch {
             let failures = model.renameBatch(items, pattern: pattern, start: start)
             if failures > 0 {
-                error = "\(failures) file(s) could not be renamed (name in use?)."
+                error = String(localized: "\(failures) file(s) could not be renamed (name in use?).")
             } else {
                 dismiss()
             }

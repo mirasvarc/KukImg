@@ -49,37 +49,40 @@ nonisolated struct ConvertRequest: Identifiable, Sendable {
     let items: [ImageItem]
 }
 
-enum ZoomCommand: Equatable, Sendable { case zoomIn, zoomOut, actualSize, fit }
+nonisolated enum ZoomCommand: Equatable, Sendable { case zoomIn, zoomOut, actualSize, fit }
 
 /// A one-shot zoom request from the menu bar; `id` makes repeated identical
 /// commands distinct so `onChange` in DetailView fires every time.
-struct ZoomRequest: Equatable, Sendable {
+nonisolated struct ZoomRequest: Equatable, Sendable {
     let command: ZoomCommand
     let id: Int
 }
 
-enum SortOrder: String, CaseIterable, Codable, Sendable {
+nonisolated enum SortOrder: String, CaseIterable, Codable, Sendable {
     case nameAsc, nameDesc, modifiedDesc, modifiedAsc, sizeDesc, sizeAsc, dateTakenDesc, dateTakenAsc
 
     var label: String {
         switch self {
-        case .nameAsc:       "Name (A → Z)"
-        case .nameDesc:      "Name (Z → A)"
-        case .modifiedDesc:  "Newest First"
-        case .modifiedAsc:   "Oldest First"
-        case .sizeDesc:      "Largest First"
-        case .sizeAsc:       "Smallest First"
-        case .dateTakenDesc: "Date Taken (Newest)"
-        case .dateTakenAsc:  "Date Taken (Oldest)"
+        case .nameAsc:       String(localized: "Name (A → Z)")
+        case .nameDesc:      String(localized: "Name (Z → A)")
+        case .modifiedDesc:  String(localized: "Newest First")
+        case .modifiedAsc:   String(localized: "Oldest First")
+        case .sizeDesc:      String(localized: "Largest First")
+        case .sizeAsc:       String(localized: "Smallest First")
+        case .dateTakenDesc: String(localized: "Date Taken (Newest)")
+        case .dateTakenAsc:  String(localized: "Date Taken (Oldest)")
         }
     }
 
     /// These orders need EXIF dates read from the files before sorting.
     var needsDateTaken: Bool { self == .dateTakenDesc || self == .dateTakenAsc }
+
+    /// Photos assets carry no file size, so size orders make no sense there.
+    var isSizeBased: Bool { self == .sizeDesc || self == .sizeAsc }
 }
 
-/// Culling flags — session-only, keyed by file URL so they survive switching
-/// between folders.
+/// Culling flags. Files keep them as Finder tags, Photos assets in the app's
+/// defaults (see `FinderTags` / `AssetFlagStore`).
 nonisolated enum ImageFlag: String, Sendable {
     case pick, reject
 }
@@ -89,9 +92,9 @@ nonisolated enum FlagFilter: String, CaseIterable, Sendable {
 
     var label: String {
         switch self {
-        case .all:      "All Images"
-        case .picked:   "Picked"
-        case .rejected: "Rejected"
+        case .all:      String(localized: "All Images")
+        case .picked:   String(localized: "Picked")
+        case .rejected: String(localized: "Rejected")
         }
     }
 }
@@ -100,6 +103,13 @@ nonisolated enum FlagFilter: String, CaseIterable, Sendable {
 nonisolated struct RenameRequest: Identifiable, Sendable {
     let id = UUID()
     let items: [ImageItem]
+}
+
+/// A long-running file operation, shown with its progress in the status bar.
+nonisolated struct Activity: Equatable, Sendable {
+    let title: String
+    var completed: Int
+    let total: Int
 }
 
 @Observable
@@ -157,13 +167,24 @@ final class AppModel {
     var convertRequest: ConvertRequest?
     /// Non-nil while the rename sheet should be up.
     var renameRequest: RenameRequest?
-    /// Culling flags by file URL (session-only).
+    /// Culling flags by item URL, mirrored from Finder tags / the asset store.
     private(set) var flags: [URL: ImageFlag] = [:]
     var flagFilter: FlagFilter = .all { didSet { updateVisibleItems() } }
     private(set) var zoomRequest: ZoomRequest?
+    /// Sidebar folders that are expanded, by path. Lives here (not in the
+    /// rows) so folder navigation can reveal where it went.
+    var expandedPaths: Set<String> = []
+    /// Copy/move of picked images in progress.
+    private(set) var activity: Activity?
     /// The focused window's undo manager, attached by ContentView so that
     /// Move to Trash can be undone via the standard Edit → Undo.
     weak var undoManager: UndoManager?
+
+    /// Flat index of every visible item, so lookups by ID stay O(1) even in
+    /// folders with tens of thousands of images. Rebuilt with `visibleItems`.
+    @ObservationIgnored private var indexByID: [ImageItem.ID: Int] = [:]
+    /// Flat index where each rendered section starts (just [0] ungrouped).
+    @ObservationIgnored private var groupStarts: [Int] = [0]
 
     private var zoomRequestCount = 0
     /// Roots we hold a security scope for; released on close/deinit.
@@ -179,6 +200,12 @@ final class AppModel {
     private var selectionAnchor: ImageItem.ID?
     /// Suppresses `selection`'s collapse-to-one behaviour during multi-select edits.
     private var isSyncingSelection = false
+    /// Files whose tags are being written in the background; a scan that read
+    /// them mid-write must not overwrite the in-memory flag.
+    private var flagWritesInFlight: Set<URL> = []
+    /// Folder navigation requests run one after another, each starting from
+    /// wherever the previous one went.
+    private var folderNavigation: Task<Void, Never>?
 
     private var folderWatcher: FolderWatcher?
     private var rescanDebounce: Task<Void, Never>?
@@ -190,20 +217,30 @@ final class AppModel {
         // Default is true; bool(forKey:) alone would default to false.
         self.groupByFolder = UserDefaults.standard.object(forKey: "groupByFolder") as? Bool ?? true
         self.recents = RecentFolders.all()
+        photos.onLibraryChange = { [weak self] in self?.refreshPhotoAlbum() }
     }
 
-    deinit {
+    isolated deinit {
         for url in securityScopedRoots { url.stopAccessingSecurityScopedResource() }
     }
 
     var currentItem: ImageItem? {
-        guard let id = selection else { return nil }
-        return visibleItems.first(where: { $0.id == id })
+        guard let id = selection, let index = index(of: id) else { return nil }
+        return visibleItems[index]
     }
 
     var currentIndex: Int? {
         guard let id = selection else { return nil }
-        return visibleItems.firstIndex(where: { $0.id == id })
+        return index(of: id)
+    }
+
+    /// Position of an item in `visibleItems`, in constant time.
+    func index(of id: ImageItem.ID) -> Int? {
+        // Reading visibleItems registers the observation dependency that the
+        // (ignored) index itself can't.
+        let count = visibleItems.count
+        guard let index = indexByID[id], index < count else { return nil }
+        return index
     }
 
     /// Title of whatever is being browsed — a folder or a Photos album.
@@ -231,25 +268,40 @@ final class AppModel {
         }
         // Keep the flat order identical to the rendered order so index-based
         // navigation (arrows, slideshow, "3 / 42") stays truthful.
-        visibleItems = groups.isEmpty ? filtered : groups.flatMap(\.items)
+        let flat = groups.isEmpty ? filtered : groups.flatMap(\.items)
 
-        // Nothing left to show (deleted the last image, emptied the filter,
-        // switched source) — leave fullscreen instead of keeping the flag set,
-        // which would make it pop back on the next selection.
-        if visibleItems.isEmpty { isFullscreen = false }
+        var index: [ImageItem.ID: Int] = [:]
+        index.reserveCapacity(flat.count)
+        for (position, item) in flat.enumerated() { index[item.id] = position }
+        indexByID = index
+        var starts: [Int] = []
+        var offset = 0
+        for group in groups {
+            starts.append(offset)
+            offset += group.items.count
+        }
+        groupStarts = starts.isEmpty ? [0] : starts
+        visibleItems = flat
 
-        if let id = selection, !visibleItems.contains(where: { $0.id == id }) {
+        // Nothing left to show (deleted the last image, emptied the filter)
+        // — leave fullscreen instead of keeping the flag set, which would make
+        // it pop back on the next selection. A folder switch in progress
+        // (isLoading) keeps it: the next folder's images take over.
+        if visibleItems.isEmpty, !isLoading { isFullscreen = false }
+
+        if let id = selection, indexByID[id] == nil {
             selection = visibleItems.first?.id
         }
-        let valid = Set(visibleItems.map(\.id))
         withoutSyncing {
-            selectedIDs.formIntersection(valid)
+            if !selectedIDs.isEmpty {
+                selectedIDs = selectedIDs.filter { indexByID[$0] != nil }
+            }
             if selectedIDs.isEmpty, let sel = selection { selectedIDs = [sel] }
-            if let anchor = selectionAnchor, !valid.contains(anchor) { selectionAnchor = selection }
+            if let anchor = selectionAnchor, indexByID[anchor] == nil { selectionAnchor = selection }
         }
     }
 
-    private nonisolated static func group(_ items: [ImageItem], relativeTo root: URL?) -> [ImageGroup] {
+    nonisolated static func group(_ items: [ImageItem], relativeTo root: URL?) -> [ImageGroup] {
         var order: [URL] = []
         var buckets: [URL: [ImageItem]] = [:]
         for item in items {
@@ -284,8 +336,9 @@ final class AppModel {
     /// Items acted on by Share/Convert/Trash — the multi-selection, or just the
     /// focused item when nothing is explicitly selected.
     var selectedItems: [ImageItem] {
-        let picked = visibleItems.filter { selectedIDs.contains($0.id) }
-        if !picked.isEmpty { return picked }
+        if selectedIDs.count > 1 {
+            return selectedIDs.compactMap { index(of: $0) }.sorted().map { visibleItems[$0] }
+        }
         return currentItem.map { [$0] } ?? []
     }
 
@@ -302,9 +355,7 @@ final class AppModel {
     func select(_ id: ImageItem.ID, extending: Bool = false, toggling: Bool = false) {
         if extending {
             let anchor = selectionAnchor ?? selection
-            guard let anchor,
-                  let a = visibleItems.firstIndex(where: { $0.id == anchor }),
-                  let b = visibleItems.firstIndex(where: { $0.id == id })
+            guard let anchor, let a = index(of: anchor), let b = index(of: id)
             else { selection = id; return }
             withoutSyncing {
                 selectedIDs = Set(visibleItems[min(a, b)...max(a, b)].map(\.id))
@@ -315,7 +366,7 @@ final class AppModel {
                 if selectedIDs.contains(id) {
                     selectedIDs.remove(id)
                     if selection == id {
-                        selection = visibleItems.last(where: { selectedIDs.contains($0.id) })?.id
+                        selection = selectedIDs.compactMap { index(of: $0) }.max().map { visibleItems[$0].id }
                     }
                 } else {
                     selectedIDs.insert(id)
@@ -360,6 +411,21 @@ final class AppModel {
         select(visibleItems[new].id, extending: true)
     }
 
+    /// Moves one visual row up or down in a grid of `columns`, keeping the
+    /// column. Section headers restart the rows, so the math runs per section.
+    func moveVertically(by direction: Int, columns: Int, extend: Bool) {
+        guard !visibleItems.isEmpty else { return }
+        guard let current = currentIndex else {
+            selectFirst()
+            return
+        }
+        let target = GridMath.verticalTarget(
+            from: current, direction: direction, columns: columns,
+            groupStarts: groupStarts, total: visibleItems.count
+        )
+        select(visibleItems[target].id, extending: extend)
+    }
+
     func selectFirst() { selection = visibleItems.first?.id }
     func selectLast()  { selection = visibleItems.last?.id }
 
@@ -370,7 +436,7 @@ final class AppModel {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.prompt = "Open"
+        panel.prompt = String(localized: "Open")
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {
             openRoot(url, isSecurityScoped: false)
@@ -410,7 +476,8 @@ final class AppModel {
             let parent = url.deletingLastPathComponent()
             // Reuse a stored bookmark when the parent folder is in Recents —
             // that grants sandbox access to the whole folder, not just the file.
-            if let scoped = recents.lazy.compactMap(RecentFolders.resolve).first(where: { $0.path == parent.path }) {
+            if let recent = recents.first(where: { $0.path == parent.path }),
+               let scoped = RecentFolders.resolve(recent) {
                 openRoot(scoped, isSecurityScoped: true)
             } else if (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) != nil {
                 openRoot(parent, isSecurityScoped: false)
@@ -432,8 +499,9 @@ final class AppModel {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.directoryURL = parent
-        panel.message = "Kuk can only see the opened image. Grant access to “\(parent.lastPathComponent)” to browse all images in it."
-        panel.prompt = "Grant Access"
+        let name = parent.lastPathComponent
+        panel.message = String(localized: "Kuk can only see the opened image. Grant access to “\(name)” to browse all images in it.")
+        panel.prompt = String(localized: "Grant Access")
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return url
     }
@@ -448,6 +516,7 @@ final class AppModel {
             }
             openFolders.append(url)
         }
+        // Re-created on every open, which also refreshes a stale bookmark.
         recents = RecentFolders.add(url)
         display(folder: url)
     }
@@ -456,14 +525,16 @@ final class AppModel {
     /// Sandbox access to subfolders flows from their root's active scope.
     func display(folder url: URL) {
         rememberCurrentSelection()
+        // Set before emptying the list so fullscreen survives the switch.
+        self.isLoading = true
         self.photoAlbum = nil
         self.folder = url
         self.items = []
         self.selection = nil
-        self.isLoading = true
         // A dropped file's explicit selection wins over the remembered one.
         if pendingSelection == nil { pendingSelection = rememberedSelections[url.path] }
         prefetcher.cancelAll()
+        revealInSidebar(url)
         startMonitoring(url)
         rescan()
     }
@@ -498,13 +569,67 @@ final class AppModel {
     private func clearContents() {
         scanGeneration += 1  // invalidate any in-flight scan
         scanTask?.cancel()
+        isLoading = false
         folder = nil
         photoAlbum = nil
         items = []
         selection = nil
-        isLoading = false
         prefetcher.cancelAll()
         folderWatcher = nil
+    }
+
+    // MARK: - Folder navigation
+
+    /// Next folder with images, in sidebar order (depth-first, continuing into
+    /// the next open root).
+    func goToNextFolder() { navigateFolder(forward: true) }
+
+    /// Previous folder with images, in sidebar order.
+    func goToPreviousFolder() { navigateFolder(forward: false) }
+
+    var canNavigateFolders: Bool { folder != nil }
+
+    /// True when the displayed folder sits below one of the open roots.
+    var canGoToEnclosingFolder: Bool {
+        guard let folder else { return false }
+        return openFolders.contains { folder.path.hasPrefix($0.path + "/") }
+    }
+
+    func goToEnclosingFolder() {
+        guard canGoToEnclosingFolder, let folder else { NSSound.beep(); return }
+        pendingSelection = nil
+        display(folder: folder.deletingLastPathComponent())
+    }
+
+    private func navigateFolder(forward: Bool) {
+        guard folder != nil else { NSSound.beep(); return }
+        let previous = folderNavigation
+        folderNavigation = Task {
+            await previous?.value
+            guard let current = self.folder else { return }
+            let roots = self.openFolders
+            let descend = !self.includeSubfolders
+            let target = await Task.detached(priority: .userInitiated) {
+                FolderNavigator.step(from: current, roots: roots, forward: forward, descend: descend)
+            }.value
+            // The user went somewhere else meanwhile.
+            guard self.folder == current else { return }
+            guard let target else { NSSound.beep(); return }
+            self.display(folder: target)
+        }
+    }
+
+    /// Expands the sidebar tree down to `url`.
+    private func revealInSidebar(_ url: URL) {
+        guard let root = openFolders.first(where: { url.path.hasPrefix($0.path + "/") }) else { return }
+        var dir = url.deletingLastPathComponent()
+        var paths = expandedPaths
+        while dir.path.count >= root.path.count {
+            paths.insert(dir.path)
+            if dir.path == root.path { break }
+            dir = dir.deletingLastPathComponent()
+        }
+        if paths != expandedPaths { expandedPaths = paths }
     }
 
     // MARK: - Photos
@@ -514,29 +639,55 @@ final class AppModel {
     /// cached copy on demand.
     func displayPhotos(_ album: PhotoAlbum) {
         rememberCurrentSelection()
+        isLoading = true
         folderWatcher = nil
         folder = nil
         photoAlbum = album
         items = []
         selection = nil
-        isLoading = true
         prefetcher.cancelAll()
+        loadPhotos(album, keeping: rememberedSelections[album.id])
+    }
+
+    /// Refetches the displayed album after the library changed, keeping the
+    /// selection (by asset, since an edit gives an asset a new URL).
+    private func refreshPhotoAlbum() {
+        guard let album = photoAlbum else { return }
+        loadPhotos(album, keeping: selection)
+    }
+
+    private func loadPhotos(_ album: PhotoAlbum, keeping wanted: ImageItem.ID?) {
         scanGeneration += 1
         scanTask?.cancel()
         let generation = scanGeneration
         let order = sortOrder
+        let wantedAsset = wanted.flatMap { id in items.first { $0.id == id }?.assetIdentifier }
 
         Task { @MainActor in
             let fetched = await self.photos.items(in: album)
+            let sorted = await Task.detached(priority: .userInitiated) {
+                AppModel.sorted(fetched, by: order)
+            }.value
             guard generation == self.scanGeneration else { return }
-            self.items = Self.sorted(fetched, by: order)
+
+            let stored = AssetFlagStore.all()
+            var updated = self.flags
+            for item in sorted {
+                if let id = item.assetIdentifier { updated[item.url] = stored[id] }
+            }
+            self.flags = updated
+
             self.isLoading = false
-            if let remembered = self.rememberedSelections[album.id],
-               self.visibleItems.contains(where: { $0.id == remembered }) {
-                self.selection = remembered
-            } else {
+            self.items = sorted
+            if let wanted, self.index(of: wanted) != nil {
+                self.selection = wanted
+            } else if let wantedAsset,
+                      let match = sorted.first(where: { $0.assetIdentifier == wantedAsset }) {
+                self.selection = match.id
+            } else if self.selection == nil {
                 self.selection = self.visibleItems.first?.id
             }
+            if order != self.sortOrder { self.applySort() }
         }
     }
 
@@ -556,38 +707,48 @@ final class AppModel {
         // stop the old scan, not let it run to completion for nothing.
         scanTask?.cancel()
         scanTask = Task.detached(priority: .userInitiated) {
-            let scanned = ImageScanner.scan(url, recursive: recursive)
+            guard let scanned = ImageScanner.scan(url, recursive: recursive) else { return }
+            let dates = order.needsDateTaken ? MetadataReader.dateTakenMap(for: scanned.items) : [:]
             guard !Task.isCancelled else { return }
-            let dates = order.needsDateTaken ? MetadataReader.dateTakenMap(for: scanned) : [:]
-            guard !Task.isCancelled else { return }
-            let sorted = AppModel.sorted(scanned, by: order, dateTaken: dates)
+            let sorted = AppModel.sorted(scanned.items, by: order, dateTaken: dates)
             await MainActor.run {
                 guard generation == self.scanGeneration else { return }
-                self.applyScanResult(sorted)
+                self.applyScanResult(sorted, flags: scanned.flags, order: order)
             }
         }
     }
 
-    private func applyScanResult(_ sorted: [ImageItem]) {
+    private func applyScanResult(_ sorted: [ImageItem], flags scannedFlags: [URL: ImageFlag], order: SortOrder) {
         var result = sorted
         // A dropped image grants sandbox access to the file, not its folder —
         // if the folder scan came back empty, still show the dropped file.
         if let pending = pendingSelection, result.isEmpty {
-            let values = try? pending.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let values = try? pending.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .tagNamesKey])
             result = [ImageItem(
                 url: pending,
                 modifiedAt: values?.contentModificationDate ?? .distantPast,
                 fileSize: Int64(values?.fileSize ?? 0)
             )]
         }
-        items = result
+
+        // Tags on disk are the source of truth, except for files whose new tag
+        // is still being written.
+        var updated = flags
+        for item in result where !flagWritesInFlight.contains(item.url) {
+            updated[item.url] = scannedFlags[item.url]
+        }
+        if updated != flags { flags = updated }
+
         isLoading = false
-        if let pending = pendingSelection, result.contains(where: { $0.id == pending }) {
+        items = result
+        if let pending = pendingSelection, index(of: pending) != nil {
             selection = pending
-        } else if selection == nil || !result.contains(where: { $0.id == selection }) {
+        } else if selection == nil || index(of: selection!) == nil {
             selection = visibleItems.first?.id
         }
         pendingSelection = nil
+        // The order was changed while this scan ran; its sort is stale.
+        if order != sortOrder { applySort() }
     }
 
     // MARK: - Folder watching
@@ -624,10 +785,7 @@ final class AppModel {
 
     func reveal(_ targets: [ImageItem]) {
         Task {
-            var urls: [URL] = []
-            for item in targets {
-                if let url = await ImageLoading.fileURL(for: item) { urls.append(url) }
-            }
+            let urls = await ImageLoading.fileURLs(for: targets)
             guard !urls.isEmpty else { return }
             NSWorkspace.shared.activateFileViewerSelecting(urls)
         }
@@ -640,12 +798,15 @@ final class AppModel {
     func copy(_ targets: [ImageItem]) {
         guard !targets.isEmpty else { return }
         Task {
-            var objects: [NSPasteboardWriting] = []
-            for item in targets {
-                if let url = await ImageLoading.fileURL(for: item) { objects.append(url as NSURL) }
-            }
-            if targets.count == 1, let image = await ImageLoading.fullImage(for: targets[0]) {
-                objects.append(image)
+            let urls = await ImageLoading.fileURLs(for: targets)
+            var objects: [NSPasteboardWriting] = urls.map { $0 as NSURL }
+            if targets.count == 1, let url = urls.first {
+                // Decoded straight from the file, bypassing the viewer cache: a
+                // one-off native decode shouldn't evict what's being browsed.
+                let image = await Task.detached(priority: .userInitiated) {
+                    ImageDecoder.decode(url: url)
+                }.value
+                if let image { objects.append(image) }
             }
             guard !objects.isEmpty else { return }
             let pb = NSPasteboard.general
@@ -656,16 +817,19 @@ final class AppModel {
 
     func delete(_ item: ImageItem) { delete([item]) }
 
+    /// Moves files to the Trash. The grid updates at once; the file operations
+    /// run in the background, and anything that couldn't be trashed comes back
+    /// with the rescan that follows a failure.
     func delete(_ targets: [ImageItem]) {
         // Photos assets live in the system library — Kuk never deletes those.
         let deletable = targets.filter { !$0.isAsset }
         guard !deletable.isEmpty else { NSSound.beep(); return }
 
         let ids = Set(deletable.map(\.id))
-        let firstIdx = visibleItems.firstIndex { ids.contains($0.id) }
+        let firstIdx = deletable.compactMap { index(of: $0.id) }.min()
         let actionName = deletable.count == 1
-            ? "Move to Trash"
-            : "Move \(deletable.count) Images to Trash"
+            ? String(localized: "Move to Trash")
+            : String(localized: "Move \(deletable.count) Images to Trash")
         performTrash(deletable.map(\.url), actionName: actionName)
 
         items.removeAll { ids.contains($0.id) }
@@ -679,7 +843,13 @@ final class AppModel {
         }
     }
 
-    struct TrashedItem: Sendable {
+    /// Filled in once the background trash finishes; the undo action holds it
+    /// from the start, because undo registration has to happen synchronously.
+    final class TrashBatch {
+        var entries: [TrashedItem] = []
+    }
+
+    nonisolated struct TrashedItem: Sendable {
         let originalURL: URL
         let trashURL: URL
     }
@@ -687,50 +857,39 @@ final class AppModel {
     /// Trashes the files and registers the inverse (restore) with the undo
     /// manager. Restore registers a re-trash in turn, so undo/redo cycles work.
     private func performTrash(_ urls: [URL], actionName: String) {
-        var restores: [TrashedItem] = []
-        var failed = false
-        for url in urls {
-            do {
-                var trashed: NSURL?
-                try FileManager.default.trashItem(at: url, resultingItemURL: &trashed)
-                if let trashURL = trashed as URL? {
-                    restores.append(TrashedItem(originalURL: url, trashURL: trashURL))
-                }
-            } catch {
-                failed = true
+        let batch = TrashBatch()
+        undoManager?.registerUndo(withTarget: self) { model in
+            model.restoreFromTrash(batch, actionName: actionName)
+        }
+        undoManager?.setActionName(actionName)
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                FileOperations.trash(urls)
+            }.value
+            batch.entries = result.trashed
+            if result.failures > 0 {
+                NSSound.beep()
+                rescan()
             }
         }
-        if !restores.isEmpty {
-            let payload = restores
-            undoManager?.registerUndo(withTarget: self) { model in
-                model.restoreFromTrash(payload, actionName: actionName)
-            }
-            undoManager?.setActionName(actionName)
-        }
-        if failed { NSSound.beep() }
     }
 
-    private func restoreFromTrash(_ restores: [TrashedItem], actionName: String) {
-        var restoredURLs: [URL] = []
-        var failed = false
-        for entry in restores {
-            do {
-                try FileManager.default.moveItem(at: entry.trashURL, to: entry.originalURL)
-                restoredURLs.append(entry.originalURL)
-            } catch {
-                failed = true
-            }
+    private func restoreFromTrash(_ batch: TrashBatch, actionName: String) {
+        let entries = batch.entries
+        guard !entries.isEmpty else { return }
+        let originals = entries.map(\.originalURL)
+        undoManager?.registerUndo(withTarget: self) { model in
+            model.retrash(originals, actionName: actionName)
         }
-        if !restoredURLs.isEmpty {
-            let payload = restoredURLs
-            undoManager?.registerUndo(withTarget: self) { model in
-                model.retrash(payload, actionName: actionName)
-            }
-            undoManager?.setActionName(actionName)
+        undoManager?.setActionName(actionName)
+        pendingSelection = originals.first
+        Task {
+            let failures = await Task.detached(priority: .userInitiated) {
+                FileOperations.restore(entries)
+            }.value
+            if failures > 0 { NSSound.beep() }
+            rescan()
         }
-        pendingSelection = restoredURLs.first
-        rescan()
-        if failed { NSSound.beep() }
     }
 
     /// Redo of a trash operation. The rescan restores selection sensibly.
@@ -739,7 +898,6 @@ final class AppModel {
         let paths = Set(urls.map(\.path))
         items.removeAll { paths.contains($0.url.path) }
         withoutSyncing { selectedIDs = [] }
-        rescan()
     }
 
     // MARK: - Zoom
@@ -751,28 +909,30 @@ final class AppModel {
 
     // MARK: - Prefetching
 
+    /// Warms grid thumbnails around the selection; the viewer prefetches its
+    /// own full-size neighbours.
     func prefetchNeighbors(thumbSize: CGFloat, scale: CGFloat) {
         guard let center = currentIndex else { return }
-        prefetcher.update(around: center, in: visibleItems, thumbSize: thumbSize, scale: scale)
+        let lo = max(0, center - 1)
+        let hi = min(visibleItems.count - 1, center + 3)
+        guard lo <= hi else { return }
+        prefetcher.prefetch(Array(visibleItems[lo...hi]), pointSize: thumbSize, scale: scale)
     }
 
     // MARK: - Sorting
 
     private var sortToken = 0
 
+    /// Sorting thousands of names takes long enough to drop frames, so it
+    /// always runs off the main thread; the result is only applied if nothing
+    /// changed the list or the order in the meantime.
     private func applySort() {
         let order = sortOrder
-        guard order.needsDateTaken else {
-            items = Self.sorted(items, by: order)
-            return
-        }
-        // EXIF dates are read off the main thread first; the result is only
-        // applied if nothing changed the list or the order in the meantime.
         sortToken += 1
         let token = sortToken
         let snapshot = items
         Task.detached(priority: .userInitiated) {
-            let dates = MetadataReader.dateTakenMap(for: snapshot)
+            let dates = order.needsDateTaken ? MetadataReader.dateTakenMap(for: snapshot) : [:]
             let sorted = AppModel.sorted(snapshot, by: order, dateTaken: dates)
             await MainActor.run {
                 guard token == self.sortToken, order == self.sortOrder,
@@ -782,21 +942,48 @@ final class AppModel {
         }
     }
 
+    /// Ties (same date, same size) fall back to the name, so the order is
+    /// stable across rescans.
     nonisolated static func sorted(
         _ items: [ImageItem], by order: SortOrder, dateTaken: [URL: Date] = [:]
     ) -> [ImageItem] {
-        // Photos assets already carry their capture date as modifiedAt.
-        func taken(_ item: ImageItem) -> Date { dateTaken[item.url] ?? item.modifiedAt }
-        switch order {
-        case .nameAsc:       return items.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-        case .nameDesc:      return items.sorted { $0.name.localizedStandardCompare($1.name) == .orderedDescending }
-        case .modifiedDesc:  return items.sorted { $0.modifiedAt > $1.modifiedAt }
-        case .modifiedAsc:   return items.sorted { $0.modifiedAt < $1.modifiedAt }
-        case .sizeDesc:      return items.sorted { $0.fileSize > $1.fileSize }
-        case .sizeAsc:       return items.sorted { $0.fileSize < $1.fileSize }
-        case .dateTakenDesc: return items.sorted { taken($0) > taken($1) }
-        case .dateTakenAsc:  return items.sorted { taken($0) < taken($1) }
+        // lastPathComponent is costly enough to precompute once per item.
+        let names = items.map(\.name)
+        func nameOrder(_ a: Int, _ b: Int) -> ComparisonResult {
+            names[a].localizedStandardCompare(names[b])
         }
+        // Photos assets already carry their capture date as modifiedAt.
+        func taken(_ i: Int) -> Date { dateTaken[items[i].url] ?? items[i].modifiedAt }
+
+        var indices = Array(items.indices)
+        switch order {
+        case .nameAsc:
+            indices.sort { nameOrder($0, $1) == .orderedAscending }
+        case .nameDesc:
+            indices.sort { nameOrder($0, $1) == .orderedDescending }
+        case .modifiedDesc, .modifiedAsc:
+            let dates = items.map(\.modifiedAt)
+            let newest = order == .modifiedDesc
+            indices.sort { a, b in
+                if dates[a] != dates[b] { return newest ? dates[a] > dates[b] : dates[a] < dates[b] }
+                return nameOrder(a, b) == .orderedAscending
+            }
+        case .sizeDesc, .sizeAsc:
+            let largest = order == .sizeDesc
+            indices.sort { a, b in
+                let sa = items[a].fileSize, sb = items[b].fileSize
+                if sa != sb { return largest ? sa > sb : sa < sb }
+                return nameOrder(a, b) == .orderedAscending
+            }
+        case .dateTakenDesc, .dateTakenAsc:
+            let dates = items.indices.map(taken)
+            let newest = order == .dateTakenDesc
+            indices.sort { a, b in
+                if dates[a] != dates[b] { return newest ? dates[a] > dates[b] : dates[a] < dates[b] }
+                return nameOrder(a, b) == .orderedAscending
+            }
+        }
+        return indices.map { items[$0] }
     }
 
     // MARK: - Culling
@@ -807,21 +994,49 @@ final class AppModel {
     var hasRejectedInCurrent: Bool { items.contains { flags[$0.url] == .reject } }
 
     /// Sets (nil clears) a flag; setting the flag every target already has
-    /// toggles it off, so `P` `P` un-picks.
+    /// toggles it off, so `P` `P` un-picks. Persisted as Finder tags on files
+    /// and in the asset store for Photos items.
     func setFlag(_ flag: ImageFlag?, for targets: [ImageItem]) {
         guard !targets.isEmpty else { return }
-        if let flag, targets.allSatisfy({ flags[$0.url] == flag }) {
-            for target in targets { flags[target.url] = nil }
+        let newFlag: ImageFlag? = if let flag, targets.allSatisfy({ flags[$0.url] == flag }) {
+            nil
         } else {
-            for target in targets { flags[target.url] = flag }
+            flag
         }
+        var updated = flags
+        for target in targets { updated[target.url] = newFlag }
+        flags = updated
+        persist(newFlag, for: targets)
         if flagFilter != .all { updateVisibleItems() }
+    }
+
+    private func persist(_ flag: ImageFlag?, for targets: [ImageItem]) {
+        let assetIDs = targets.compactMap(\.assetIdentifier)
+        if !assetIDs.isEmpty { AssetFlagStore.set(flag, for: assetIDs) }
+
+        let files = targets.filter { !$0.isAsset }.map(\.url)
+        guard !files.isEmpty else { return }
+        // A few tags are microseconds of work; thousands go to the background.
+        // A read-only volume simply keeps the flag for this session.
+        if files.count <= 64 {
+            for url in files { FinderTags.write(flag, to: url) }
+            return
+        }
+        flagWritesInFlight.formUnion(files)
+        Task {
+            await Task.detached(priority: .userInitiated) {
+                for url in files { FinderTags.write(flag, to: url) }
+            }.value
+            flagWritesInFlight.subtract(files)
+        }
     }
 
     /// Copies (or moves) all picked images in the current folder to a folder
     /// the user chooses. Photos assets can be copied (via their export) but
-    /// never moved — they stay in the library.
+    /// never moved — they stay in the library. Runs in the background with its
+    /// progress in the status bar.
     func exportPicked(move: Bool) {
+        guard activity == nil else { NSSound.beep(); return }
         let picked = items.filter { flags[$0.url] == .pick }
         let targets = move ? picked.filter { !$0.isAsset } : picked
         guard !targets.isEmpty else { NSSound.beep(); return }
@@ -831,55 +1046,43 @@ final class AppModel {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = move ? "Move" : "Copy"
+        panel.prompt = move ? String(localized: "Move") : String(localized: "Copy")
         panel.message = move
-            ? "Choose where to move the \(targets.count) picked image(s)."
-            : "Choose where to copy the \(targets.count) picked image(s)."
+            ? String(localized: "Choose where to move the \(targets.count) picked image(s).")
+            : String(localized: "Choose where to copy the \(targets.count) picked image(s).")
         guard panel.runModal() == .OK, let dir = panel.url else { return }
 
+        activity = Activity(
+            title: move ? String(localized: "Moving") : String(localized: "Copying"),
+            completed: 0,
+            total: targets.count
+        )
         Task {
-            let fm = FileManager.default
             var failed = false
-            for item in targets {
-                guard let source = await ImageLoading.fileURL(for: item) else {
-                    failed = true
-                    continue
-                }
-                let destination = Self.uniqueDestination(for: source.lastPathComponent, in: dir)
-                do {
-                    if move, !item.isAsset {
-                        try fm.moveItem(at: source, to: destination)
-                        flags[item.url] = nil
-                    } else {
-                        try fm.copyItem(at: source, to: destination)
-                    }
-                } catch {
+            for (index, item) in targets.enumerated() {
+                if let source = await ImageLoading.fileURL(for: item) {
+                    let moves = move && !item.isAsset
+                    let ok = await Task.detached(priority: .userInitiated) {
+                        FileOperations.transfer(source, into: dir, move: moves)
+                    }.value
+                    if ok, moves { flags[item.url] = nil }
+                    failed = failed || !ok
+                } else {
                     failed = true
                 }
+                activity?.completed = index + 1
             }
+            activity = nil
             if failed { NSSound.beep() }
             if move { rescan() }
         }
     }
 
     func trashRejected() {
-        let rejected = items.filter { flags[$0.url] == .reject }
+        let rejected = items.filter { flags[$0.url] == .reject && !$0.isAsset }
         guard !rejected.isEmpty else { NSSound.beep(); return }
         delete(rejected)
         for item in rejected { flags[item.url] = nil }
-    }
-
-    nonisolated private static func uniqueDestination(for filename: String, in dir: URL) -> URL {
-        let base = (filename as NSString).deletingPathExtension
-        let ext = (filename as NSString).pathExtension
-        var candidate = dir.appendingPathComponent(filename)
-        var counter = 1
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            let name = ext.isEmpty ? "\(base)-\(counter)" : "\(base)-\(counter).\(ext)"
-            candidate = dir.appendingPathComponent(name)
-            counter += 1
-        }
-        return candidate
     }
 
     // MARK: - Rotation
@@ -923,13 +1126,13 @@ final class AppModel {
     /// to show in the sheet, or nil on success.
     func rename(_ item: ImageItem, to newBase: String) -> String? {
         let clean = PhotosLibraryModel.sanitize(newBase).trimmingCharacters(in: .whitespaces)
-        guard !clean.isEmpty else { return "The name is empty." }
+        guard !clean.isEmpty else { return String(localized: "The name is empty.") }
         let ext = item.url.pathExtension
         let destination = item.url.deletingLastPathComponent()
             .appendingPathComponent(ext.isEmpty ? clean : "\(clean).\(ext)")
         guard destination.path != item.url.path else { return nil }
         guard !FileManager.default.fileExists(atPath: destination.path) else {
-            return "A file with this name already exists."
+            return String(localized: "A file with this name already exists.")
         }
         do {
             try FileManager.default.moveItem(at: item.url, to: destination)
@@ -944,65 +1147,215 @@ final class AppModel {
     }
 
     /// Batch rename: a run of `#` in the pattern becomes a zero-padded counter
-    /// ("Trip-###" → Trip-001, Trip-002, …). Returns the number of failures.
+    /// ("Trip-###" → Trip-001, Trip-002, …). Files are first moved to temporary
+    /// names, so the batch may reuse names its own files currently hold (e.g.
+    /// renumbering). Returns the number of failures.
     func renameBatch(_ targets: [ImageItem], pattern: String, start: Int) -> Int {
-        let hashes = pattern.filter { $0 == "#" }.count
-        var counter = start
+        let fm = FileManager.default
+        let plan = RenamePattern.plan(targets.map(\.url), pattern: pattern, start: start)
+        let sources = Set(targets.map(\.url.path))
         var failures = 0
-        var firstRenamed: URL?
-        for item in targets {
-            let number = String(format: "%0\(max(hashes, 1))d", counter)
-            counter += 1
-            var base = hashes > 0
-                ? pattern.replacingOccurrences(of: String(repeating: "#", count: hashes), with: number)
-                : "\(pattern)-\(number)"
-            base = PhotosLibraryModel.sanitize(base)
-            let ext = item.url.pathExtension
-            let destination = item.url.deletingLastPathComponent()
-                .appendingPathComponent(ext.isEmpty ? base : "\(base).\(ext)")
-            if destination.path == item.url.path { continue }
-            if FileManager.default.fileExists(atPath: destination.path) {
+        var staged: [(temp: URL, original: URL, destination: URL)] = []
+
+        for (source, destination) in plan where destination.path != source.path {
+            // Taken by a file outside this batch: skip rather than overwrite.
+            if fm.fileExists(atPath: destination.path), !sources.contains(destination.path) {
                 failures += 1
                 continue
             }
+            let temp = source.deletingLastPathComponent()
+                .appendingPathComponent(".kuk-rename-\(UUID().uuidString)")
             do {
-                try FileManager.default.moveItem(at: item.url, to: destination)
-                flags[destination] = flags[item.url]
-                flags[item.url] = nil
-                firstRenamed = firstRenamed ?? destination
+                try fm.moveItem(at: source, to: temp)
+                staged.append((temp, source, destination))
             } catch {
                 failures += 1
             }
         }
-        pendingSelection = firstRenamed
+
+        var renamed: [(original: URL, destination: URL)] = []
+        for entry in staged {
+            do {
+                try fm.moveItem(at: entry.temp, to: entry.destination)
+                renamed.append((entry.original, entry.destination))
+            } catch {
+                // Put it back where it came from.
+                try? fm.moveItem(at: entry.temp, to: entry.original)
+                failures += 1
+            }
+        }
+        // Tags travel with the files; mirror that in memory until the rescan.
+        let before = flags
+        var updated = flags
+        for entry in renamed { updated[entry.original] = nil }
+        for entry in renamed { updated[entry.destination] = before[entry.original] }
+        flags = updated
+        pendingSelection = renamed.first?.destination
         rescan()
         return failures
     }
+
+    nonisolated static func uniqueDestination(for filename: String, in dir: URL) -> URL {
+        let base = (filename as NSString).deletingPathExtension
+        let ext = (filename as NSString).pathExtension
+        var candidate = dir.appendingPathComponent(filename)
+        var counter = 1
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            let name = ext.isEmpty ? "\(base)-\(counter)" : "\(base)-\(counter).\(ext)"
+            candidate = dir.appendingPathComponent(name)
+            counter += 1
+        }
+        return candidate
+    }
 }
 
-/// Warms the thumbnail/preview caches around the selection and — unlike a
-/// fire-and-forget Task per neighbor — cancels work that falls out of the
-/// window, so holding an arrow key doesn't queue hundreds of stale decodes.
+/// Row arithmetic for the grid: sections restart the rows, so moving up or
+/// down one row depends on where each section starts.
+nonisolated enum GridMath {
+    static func verticalTarget(
+        from index: Int, direction: Int, columns: Int, groupStarts: [Int], total: Int
+    ) -> Int {
+        let cols = max(1, columns)
+        let starts = groupStarts.isEmpty ? [0] : groupStarts
+        // Section containing `index`: the last start at or before it.
+        var group = 0
+        var lo = 0, hi = starts.count - 1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if starts[mid] <= index { group = mid; lo = mid + 1 } else { hi = mid - 1 }
+        }
+        func bounds(_ g: Int) -> (start: Int, count: Int) {
+            let start = starts[g]
+            let end = g + 1 < starts.count ? starts[g + 1] : total
+            return (start, end - start)
+        }
+        let (start, count) = bounds(group)
+        let position = index - start
+        let row = position / cols
+        let column = position % cols
+
+        if direction < 0 {
+            if row > 0 { return start + (row - 1) * cols + column }
+            guard group > 0 else { return 0 }
+            let previous = bounds(group - 1)
+            let lastRow = (previous.count - 1) / cols
+            return previous.start + min(lastRow * cols + column, previous.count - 1)
+        } else {
+            let lastRow = (count - 1) / cols
+            if row < lastRow { return start + min((row + 1) * cols + column, count - 1) }
+            guard group + 1 < starts.count else { return max(0, total - 1) }
+            let next = bounds(group + 1)
+            return next.start + min(column, next.count - 1)
+        }
+    }
+}
+
+/// Batch rename naming: a run of `#` becomes a zero-padded counter; without
+/// one the counter is appended ("Trip" → Trip-1, Trip-2, …).
+nonisolated enum RenamePattern {
+    static func name(pattern: String, number: Int) -> String {
+        let chars = Array(pattern)
+        guard let run = longestHashRun(in: chars) else {
+            return PhotosLibraryModel.sanitize("\(pattern)-\(number)")
+        }
+        let formatted = String(format: "%0\(run.count)d", number)
+        let name = String(chars[..<run.lowerBound]) + formatted + String(chars[run.upperBound...])
+        return PhotosLibraryModel.sanitize(name)
+    }
+
+    static func plan(_ urls: [URL], pattern: String, start: Int) -> [(source: URL, destination: URL)] {
+        urls.enumerated().map { offset, url in
+            let base = name(pattern: pattern, number: start + offset)
+            let ext = url.pathExtension
+            let destination = url.deletingLastPathComponent()
+                .appendingPathComponent(ext.isEmpty ? base : "\(base).\(ext)")
+            return (url, destination)
+        }
+    }
+
+    /// The longest run of "#" (the first one on ties).
+    private static func longestHashRun(in chars: [Character]) -> Range<Int>? {
+        var best: Range<Int>?
+        var index = 0
+        while index < chars.count {
+            guard chars[index] == "#" else { index += 1; continue }
+            var end = index
+            while end < chars.count, chars[end] == "#" { end += 1 }
+            if (best?.count ?? 0) < end - index { best = index..<end }
+            index = end
+        }
+        return best
+    }
+}
+
+/// File operations that run off the main thread.
+nonisolated enum FileOperations {
+    struct TrashResult: Sendable {
+        let trashed: [AppModel.TrashedItem]
+        let failures: Int
+    }
+
+    static func trash(_ urls: [URL]) -> TrashResult {
+        var trashed: [AppModel.TrashedItem] = []
+        var failures = 0
+        for url in urls {
+            do {
+                var result: NSURL?
+                try FileManager.default.trashItem(at: url, resultingItemURL: &result)
+                if let trashURL = result as URL? {
+                    trashed.append(AppModel.TrashedItem(originalURL: url, trashURL: trashURL))
+                }
+            } catch {
+                failures += 1
+            }
+        }
+        return TrashResult(trashed: trashed, failures: failures)
+    }
+
+    static func restore(_ entries: [AppModel.TrashedItem]) -> Int {
+        var failures = 0
+        for entry in entries {
+            do {
+                try FileManager.default.moveItem(at: entry.trashURL, to: entry.originalURL)
+            } catch {
+                failures += 1
+            }
+        }
+        return failures
+    }
+
+    /// Copies or moves a file into `dir` under a free name.
+    static func transfer(_ source: URL, into dir: URL, move: Bool) -> Bool {
+        let destination = AppModel.uniqueDestination(for: source.lastPathComponent, in: dir)
+        do {
+            if move {
+                try FileManager.default.moveItem(at: source, to: destination)
+            } else {
+                try FileManager.default.copyItem(at: source, to: destination)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
+/// Warms thumbnail caches for a window of items and — unlike a fire-and-forget
+/// Task per item — cancels work that falls out of the window, so holding an
+/// arrow key or flinging the grid doesn't queue hundreds of stale decodes.
 @MainActor
 final class Prefetcher {
     private var tasks: [ImageItem.ID: Task<Void, Never>] = [:]
 
-    func update(around index: Int, in items: [ImageItem], thumbSize: CGFloat, scale: CGFloat) {
-        guard items.indices.contains(index) else { return }
-        // Bias forward: browsing mostly moves ahead.
-        let lo = max(0, index - 1)
-        let hi = min(items.count - 1, index + 2)
-        let window = items[lo...hi].filter { $0.id != items[index].id }
+    func prefetch(_ window: [ImageItem], pointSize: CGFloat, scale: CGFloat) {
         let wanted = Set(window.map(\.id))
-
         for (id, task) in tasks where !wanted.contains(id) {
             task.cancel()
             tasks[id] = nil
         }
         for item in window where tasks[item.id] == nil {
             tasks[item.id] = Task(priority: .utility) {
-                _ = await ImageLoading.thumbnail(for: item, pixelSize: thumbSize, scale: scale)
-                _ = await ImageLoading.thumbnail(for: item, pixelSize: 2048, scale: scale)
+                _ = await ImageLoading.thumbnail(for: item, pointSize: pointSize, scale: scale)
             }
         }
     }
@@ -1013,31 +1366,36 @@ final class Prefetcher {
     }
 }
 
+nonisolated struct ScanResult: Sendable {
+    var items: [ImageItem]
+    /// Flags read from the files' Finder tags.
+    var flags: [URL: ImageFlag]
+}
+
 nonisolated enum ImageScanner {
-    static func scan(_ url: URL, recursive: Bool) -> [ImageItem] {
+    /// Returns nil when the scan was cancelled.
+    static func scan(_ url: URL, recursive: Bool) -> ScanResult? {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [
             .isRegularFileKey, .contentTypeKey,
-            .contentModificationDateKey, .fileSizeKey
+            .contentModificationDateKey, .fileSizeKey, .tagNamesKey
         ]
-        guard let enumerator = fm.enumerator(
-            at: url,
-            includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+        var options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles, .skipsPackageDescendants]
+        // Without this the enumerator still lists every subfolder's contents.
+        if !recursive { options.insert(.skipsSubdirectoryDescendants) }
+        guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: keys, options: options)
+        else { return ScanResult(items: [], flags: [:]) }
 
         var result: [ImageItem] = []
+        var flags: [URL: ImageFlag] = [:]
         result.reserveCapacity(1024)
+        let keySet = Set(keys)
 
         for case let fileURL as URL in enumerator {
             // The walk of a huge tree must die with its task — the result of a
             // cancelled scan is discarded by the generation check anyway.
-            if Task.isCancelled { return [] }
-            if !recursive, fileURL.deletingLastPathComponent() != url {
-                enumerator.skipDescendants()
-                continue
-            }
-            guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
+            if Task.isCancelled { return nil }
+            guard let values = try? fileURL.resourceValues(forKeys: keySet),
                   values.isRegularFile == true,
                   let type = values.contentType,
                   type.conforms(to: .image)
@@ -1045,8 +1403,9 @@ nonisolated enum ImageScanner {
             let mod = values.contentModificationDate ?? .distantPast
             let size = Int64(values.fileSize ?? 0)
             result.append(ImageItem(url: fileURL, modifiedAt: mod, fileSize: size))
+            if let flag = FinderTags.flag(fromTagNames: values.tagNames) { flags[fileURL] = flag }
         }
-        return result
+        return ScanResult(items: result, flags: flags)
     }
 }
 

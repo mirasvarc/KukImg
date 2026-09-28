@@ -6,24 +6,53 @@ import AppKit
 /// directory when something genuinely needs a file (full view, share, convert,
 /// copy, metadata).
 nonisolated enum ImageLoading {
-    static func thumbnail(for item: ImageItem, pixelSize: CGFloat, scale: CGFloat) async -> NSImage? {
-        switch item.origin {
-        case .file:
-            await ThumbnailCache.shared.thumbnail(
-                for: item.url, modifiedAt: item.modifiedAt, pixelSize: pixelSize, scale: scale
-            )
-        case .asset(let id):
-            await PhotosThumbnailCache.shared.thumbnail(for: id, pixelSize: pixelSize, scale: scale)
-        }
+    /// Grid-style thumbnail; `pointSize` is quantized into cache buckets.
+    static func thumbnail(for item: ImageItem, pointSize: CGFloat, scale: CGFloat) async -> NSImage? {
+        await ThumbnailCache.shared.thumbnail(for: item, pointSize: pointSize, scale: scale)
     }
 
-    /// `maxPixelSize` caps the decode (longest side); nil decodes natively —
-    /// viewing passes `DisplayBudget.maxPixelSize`, copy/deep-zoom pass nil.
-    static func fullImage(for item: ImageItem, maxPixelSize: CGFloat? = nil) async -> NSImage? {
-        guard let url = await fileURL(for: item) else { return nil }
-        return await FullImageCache.shared.image(
-            for: url, modifiedAt: item.modifiedAt, maxPixelSize: maxPixelSize
-        )
+    /// The sharpest thumbnail of the item already in memory, without any work.
+    static func cachedThumbnail(for item: ImageItem, scale: CGFloat) async -> NSImage? {
+        await ThumbnailCache.shared.bestCached(for: item, scale: scale)
+    }
+
+    /// Viewer-size decode, `cap` pixels on the longest side (see `DecodeTier`).
+    static func displayImage(for item: ImageItem, cap: Int) async -> NSImage? {
+        await FullImageCache.shared.image(for: item, cap: cap)
+    }
+
+    /// A decode of at least `cap` pixels that is already in memory.
+    static func cachedDisplayImage(for item: ImageItem, cap: Int) async -> NSImage? {
+        await FullImageCache.shared.cached(for: item, cap: cap)
+    }
+
+    /// Any decode of the item already in memory, the sharpest first.
+    static func largestCachedDisplayImage(for item: ImageItem) async -> NSImage? {
+        await FullImageCache.shared.largestCached(for: item)
+    }
+
+    /// Native-resolution decode, for deep zoom.
+    static func fullImage(for item: ImageItem) async -> NSImage? {
+        await FullImageCache.shared.image(for: item, cap: nil)
+    }
+
+    /// The file to play when the item is an animation (GIF, APNG, animated
+    /// WebP/HEICS), nil for still images. Photos animations are exported first.
+    static func animationURL(for item: ImageItem) async -> URL? {
+        switch item.origin {
+        case .file:
+            let url = item.url
+            let animated = await Task.detached(priority: .userInitiated) {
+                ImageDecoder.isAnimated(url: url)
+            }.value
+            return animated ? url : nil
+        case .asset(let id):
+            let animated = await Task.detached(priority: .userInitiated) {
+                PhotosImages.isAnimated(id)
+            }.value
+            guard animated else { return nil }
+            return await fileURL(for: item)
+        }
     }
 
     /// Metadata without forcing a Photos export: assets answer from PhotoKit

@@ -103,11 +103,40 @@ nonisolated enum MetadataReader {
         return meta
     }
 
-    private static func parseExifDate(_ s: String) -> Date? {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
-        return f.date(from: s)
+    /// EXIF dates carry no time zone; like every photo app, read them as
+    /// local time.
+    private static let exifCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar
+    }()
+
+    /// Parses "yyyy:MM:dd HH:mm:ss" by hand: creating a DateFormatter per
+    /// file dominated the Date Taken sort of big folders.
+    static func parseExifDate(_ s: String) -> Date? {
+        var numbers: [Int] = []
+        numbers.reserveCapacity(6)
+        var current = 0
+        var digits = 0
+        for byte in s.utf8 {
+            if byte >= 48 && byte <= 57 {
+                current = current * 10 + Int(byte - 48)
+                digits += 1
+            } else if digits > 0 {
+                numbers.append(current)
+                current = 0
+                digits = 0
+                if numbers.count == 6 { break }
+            }
+        }
+        if digits > 0, numbers.count < 6 { numbers.append(current) }
+        guard numbers.count >= 6, numbers[0] > 0, (1...12).contains(numbers[1]), (1...31).contains(numbers[2])
+        else { return nil }
+        let components = DateComponents(
+            year: numbers[0], month: numbers[1], day: numbers[2],
+            hour: numbers[3], minute: numbers[4], second: numbers[5]
+        )
+        return exifCalendar.date(from: components)
     }
 
     private static func formatShutter(_ seconds: Double) -> String {
@@ -122,22 +151,38 @@ nonisolated enum MetadataReader {
     static func dateTakenMap(for items: [ImageItem]) -> [URL: Date] {
         let files = items.filter { !$0.isAsset }
         guard !files.isEmpty else { return [:] }
+        // Rescans (every folder change) re-sort the whole folder; only files
+        // that are new or changed since the last read hit the disk.
         var result = [URL: Date](minimumCapacity: files.count)
-        let lock = NSLock()
-        let options = [kCGImageSourceShouldCache: false] as CFDictionary
-        DispatchQueue.concurrentPerform(iterations: files.count) { index in
-            let url = files[index].url
-            guard let src = CGImageSourceCreateWithURL(url as CFURL, options),
-                  let props = CGImageSourceCopyPropertiesAtIndex(src, 0, options) as? [CFString: Any],
-                  let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any],
-                  let raw = exif[kCGImagePropertyExifDateTimeOriginal] as? String,
-                  let date = parseExifDate(raw)
-            else { return }
-            lock.lock()
-            result[url] = date
-            lock.unlock()
+        var missing: [ImageItem] = []
+        for item in files {
+            switch DateTakenCache.shared.lookup(item) {
+            case .some(.some(let date)): result[item.url] = date
+            case .some(.none): break
+            case .none: missing.append(item)
+            }
+        }
+        guard !missing.isEmpty else { return result }
+
+        let toRead = missing
+        DispatchQueue.concurrentPerform(iterations: toRead.count) { index in
+            let item = toRead[index]
+            DateTakenCache.shared.store(readDateTaken(item.url), for: item)
+        }
+        for item in toRead {
+            if case .some(.some(let date)) = DateTakenCache.shared.lookup(item) { result[item.url] = date }
         }
         return result
+    }
+
+    private static func readDateTaken(_ url: URL) -> Date? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, options),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, options) as? [CFString: Any],
+              let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any],
+              let raw = exif[kCGImagePropertyExifDateTimeOriginal] as? String
+        else { return nil }
+        return parseExifDate(raw)
     }
 
     /// Every property ImageIO knows about the file, grouped into sections
@@ -173,6 +218,33 @@ nonisolated enum MetadataReader {
             return array.map(stringify).joined(separator: ", ")
         }
         return "\(value)"
+    }
+}
+
+/// EXIF capture dates by path + mtime, including "has none", so a rescan
+/// doesn't reopen every file of the folder.
+nonisolated final class DateTakenCache: @unchecked Sendable {
+    static let shared = DateTakenCache()
+
+    private let lock = NSLock()
+    private var dates: [String: Date?] = [:]
+
+    private static func key(_ item: ImageItem) -> String {
+        "\(item.url.path)|\(item.modifiedAt.timeIntervalSince1970)"
+    }
+
+    /// nil: not read yet; .some(nil): the file has no capture date.
+    func lookup(_ item: ImageItem) -> Date?? {
+        let key = Self.key(item)
+        return lock.withLock { dates[key] }
+    }
+
+    func store(_ date: Date?, for item: ImageItem) {
+        let key = Self.key(item)
+        lock.withLock {
+            if dates.count > 200_000 { dates.removeAll() }
+            dates[key] = .some(date)
+        }
     }
 }
 

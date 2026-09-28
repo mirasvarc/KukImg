@@ -38,6 +38,11 @@ final class PhotosLibraryModel {
     /// Total asset count of the last album when it exceeded `assetLimit`.
     private(set) var truncatedFrom: Int?
 
+    /// Called (coalesced, on the main actor) after the library changed, so the
+    /// displayed album can be refetched.
+    @ObservationIgnored var onLibraryChange: (() -> Void)?
+    @ObservationIgnored private var changeObserver: PhotosChangeObserver?
+
     var isAuthorized: Bool { status == .authorized || status == .limited }
     var isDenied: Bool { status == .denied || status == .restricted }
 
@@ -48,6 +53,18 @@ final class PhotosLibraryModel {
 
     func loadAlbums() async {
         guard isAuthorized, !isLoadingAlbums else { return }
+        if changeObserver == nil {
+            changeObserver = PhotosChangeObserver { [weak self] in
+                guard let self else { return }
+                Task { await self.reloadAlbums() }
+                self.onLibraryChange?()
+            }
+        }
+        await reloadAlbums()
+    }
+
+    private func reloadAlbums() async {
+        guard !isLoadingAlbums else { return }
         isLoadingAlbums = true
         albums = await Task.detached(priority: .userInitiated) { Self.fetchAlbums() }.value
         isLoadingAlbums = false
@@ -70,12 +87,12 @@ final class PhotosLibraryModel {
 
         let allCount = PHAsset.fetchAssets(with: .image, options: nil).count
         result.append(PhotoAlbum(
-            kind: .allPhotos, title: "All Photos", symbol: "photo.on.rectangle", count: allCount
+            kind: .allPhotos, title: String(localized: "All Photos"), symbol: "photo.on.rectangle", count: allCount
         ))
 
         let smart: [(PHAssetCollectionSubtype, PhotoAlbum.Kind, String, String)] = [
-            (.smartAlbumFavorites, .favorites, "Favorites", "heart"),
-            (.smartAlbumRecentlyAdded, .recents, "Recents", "clock")
+            (.smartAlbumFavorites, .favorites, String(localized: "Favorites"), "heart"),
+            (.smartAlbumRecentlyAdded, .recents, String(localized: "Recents"), "clock")
         ]
         for (subtype, kind, title, symbol) in smart {
             let collections = PHAssetCollection.fetchAssetCollections(
@@ -96,7 +113,7 @@ final class PhotosLibraryModel {
             guard count > 0 else { return }
             albums.append(PhotoAlbum(
                 kind: .collection(collection.localIdentifier),
-                title: collection.localizedTitle ?? "Album",
+                title: collection.localizedTitle ?? String(localized: "Album"),
                 symbol: "rectangle.stack",
                 count: count
             ))
@@ -134,11 +151,16 @@ final class PhotosLibraryModel {
 
         let total = assets.count
         var items: [ImageItem] = []
+        var fetched: [PHAsset] = []
         items.reserveCapacity(min(total, limit))
+        fetched.reserveCapacity(min(total, limit))
         assets.enumerateObjects { asset, index, stop in
             if index >= limit { stop.pointee = true; return }
+            fetched.append(asset)
             let filename = sanitize(originalFilename(of: asset) ?? "\(asset.localIdentifier).jpg")
-            let url = PhotosMaterializer.cacheURL(assetID: asset.localIdentifier, filename: filename)
+            let url = PhotosMaterializer.cacheURL(
+                assetID: asset.localIdentifier, version: asset.modificationDate, filename: filename
+            )
             items.append(ImageItem(
                 url: url,
                 modifiedAt: asset.creationDate ?? asset.modificationDate ?? .distantPast,
@@ -146,6 +168,7 @@ final class PhotosLibraryModel {
                 origin: .asset(asset.localIdentifier)
             ))
         }
+        PhotosAssetRegistry.shared.register(fetched)
         return FetchResult(items: items, total: total)
     }
 
@@ -193,8 +216,7 @@ final class PhotosLibraryModel {
 nonisolated enum PhotosMetadata {
     static func metadata(for id: String, fileSize: Int64) async -> ImageMetadata? {
         await Task.detached(priority: .userInitiated) { () -> ImageMetadata? in
-            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
-            else { return nil }
+            guard let asset = PhotosAssetRegistry.shared.asset(for: id) else { return nil }
             var meta = ImageMetadata()
             meta.pixelWidth = asset.pixelWidth
             meta.pixelHeight = asset.pixelHeight
@@ -209,72 +231,119 @@ nonisolated enum PhotosMetadata {
     }
 }
 
-// MARK: - Thumbnails
+// MARK: - Images
 
-/// Grid thumbnails for Photos assets. Kept separate from `ThumbnailCache`
-/// because PhotoKit serves these straight from the library's own cache, with no
-/// need to export the original file first.
-actor PhotosThumbnailCache {
-    static let shared = PhotosThumbnailCache()
+/// PHAsset objects by local identifier, filled from album fetches so image
+/// requests don't pay a library query per grid cell.
+nonisolated final class PhotosAssetRegistry: @unchecked Sendable {
+    static let shared = PhotosAssetRegistry()
 
-    private let cache: NSCache<NSString, NSImage> = {
-        let c = NSCache<NSString, NSImage>()
-        c.countLimit = 2000
-        c.totalCostLimit = 192 * 1024 * 1024
-        return c
-    }()
+    private let lock = NSLock()
+    private var assets: [String: PHAsset] = [:]
 
-    func thumbnail(for localIdentifier: String, pixelSize: CGFloat, scale: CGFloat) async -> NSImage? {
-        let bucket = ThumbnailCache.bucket(for: pixelSize)
-        let key = "\(localIdentifier)|\(Int(bucket))|\(Int(scale))" as NSString
-        if let cached = cache.object(forKey: key) { return cached }
-        if Task.isCancelled { return nil }
-        guard let image = await Self.request(id: localIdentifier, pixelSize: bucket * scale) else {
-            return nil
-        }
-        cache.setObject(image, forKey: key, cost: image.estimatedByteCost)
-        return image
+    func register(_ list: [PHAsset]) {
+        lock.lock()
+        for asset in list { assets[asset.localIdentifier] = asset }
+        lock.unlock()
     }
 
-    nonisolated private static func request(id: String, pixelSize: CGFloat) async -> NSImage? {
-        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
+    func asset(for id: String) -> PHAsset? {
+        lock.lock()
+        let known = assets[id]
+        lock.unlock()
+        if let known { return known }
+        guard let fetched = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
         else { return nil }
-        let options = PHImageRequestOptions()
-        options.isNetworkAccessAllowed = true
-        options.deliveryMode = .highQualityFormat
-        options.resizeMode = .fast
-        options.isSynchronous = false
-
-        return await withCheckedContinuation { continuation in
-            let box = ContinuationBox(continuation)
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: CGSize(width: pixelSize, height: pixelSize),
-                contentMode: .aspectFit,
-                options: options
-            ) { image, _ in
-                box.resume(image)
-            }
-        }
+        register([fetched])
+        return fetched
     }
 }
 
-/// PhotoKit may invoke a request handler more than once (degraded then final);
-/// this makes sure the continuation is resumed exactly once.
-nonisolated private final class ContinuationBox: @unchecked Sendable {
-    private var continuation: CheckedContinuation<NSImage?, Never>?
-    private let lock = NSLock()
-
-    init(_ continuation: CheckedContinuation<NSImage?, Never>) {
-        self.continuation = continuation
+/// Rendered images straight from PhotoKit, cancellable with the calling task.
+nonisolated enum PhotosImages {
+    enum Quality: Sendable {
+        /// Grid cells: fast resize, may be served from small local derivatives.
+        case thumbnail
+        /// The viewer: exact size from the best available local rendition.
+        case display
     }
 
-    func resume(_ image: NSImage?) {
+    static func image(for id: String, pixelSize: CGFloat, quality: Quality) async -> NSImage? {
+        guard let asset = PhotosAssetRegistry.shared.asset(for: id) else { return nil }
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .highQualityFormat
+        options.resizeMode = quality == .thumbnail ? .fast : .exact
+        options.isSynchronous = false
+
+        let box = ImageRequestBox()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                box.start(continuation) {
+                    PHImageManager.default().requestImage(
+                        for: asset,
+                        targetSize: CGSize(width: pixelSize, height: pixelSize),
+                        contentMode: .aspectFit,
+                        options: options
+                    ) { image, info in
+                        if (info?[PHImageResultIsDegradedKey] as? Bool) == true { return }
+                        box.finish(image)
+                    }
+                }
+            }
+        } onCancel: {
+            box.cancel()
+        }
+    }
+
+    /// Animated GIFs in the library; those are exported and played as files.
+    static func isAnimated(_ id: String) -> Bool {
+        PhotosAssetRegistry.shared.asset(for: id)?.playbackStyle == .imageAnimated
+    }
+}
+
+/// Resumes a PhotoKit request's continuation exactly once — on the result, on
+/// cancellation, whichever comes first — and cancels the request itself when
+/// the waiting task goes away.
+nonisolated private final class ImageRequestBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<NSImage?, Never>?
+    private var requestID: PHImageRequestID?
+    private var cancelled = false
+
+    func start(_ continuation: CheckedContinuation<NSImage?, Never>, request: () -> PHImageRequestID) {
+        lock.lock()
+        if cancelled {
+            lock.unlock()
+            continuation.resume(returning: nil)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+
+        let id = request()
+        lock.lock()
+        requestID = id
+        let cancelNow = cancelled
+        lock.unlock()
+        if cancelNow { PHImageManager.default().cancelImageRequest(id) }
+    }
+
+    func finish(_ image: NSImage?) {
         lock.lock()
         let pending = continuation
         continuation = nil
         lock.unlock()
         pending?.resume(returning: image)
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let id = requestID
+        lock.unlock()
+        if let id { PHImageManager.default().cancelImageRequest(id) }
+        finish(nil)
     }
 }
 
@@ -293,9 +362,13 @@ actor PhotosMaterializer {
         return base.appendingPathComponent("Kuk/Photos", isDirectory: true)
     }
 
-    nonisolated static func cacheURL(assetID: String, filename: String) -> URL {
-        cacheRoot
-            .appendingPathComponent(PhotosLibraryModel.sanitize(assetID), isDirectory: true)
+    /// The asset's modification date is part of the path: editing a photo in
+    /// Photos gives it a new URL, so no cache (in memory or this export
+    /// folder) serves the pre-edit version.
+    nonisolated static func cacheURL(assetID: String, version: Date?, filename: String) -> URL {
+        let stamp = Int(version?.timeIntervalSince1970 ?? 0)
+        return cacheRoot
+            .appendingPathComponent("\(PhotosLibraryModel.sanitize(assetID))-\(stamp)", isDirectory: true)
             .appendingPathComponent(filename)
     }
 
@@ -312,32 +385,47 @@ actor PhotosMaterializer {
         return result
     }
 
+    nonisolated private static let exportCount = Counter()
+
     nonisolated private static func export(id: String, to url: URL) async -> URL? {
-        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject
-        else { return nil }
+        guard let asset = PhotosAssetRegistry.shared.asset(for: id) else { return nil }
         let resources = PHAssetResource.assetResources(for: asset)
-        guard let resource = resources.first(where: { $0.type == .photo })
-                ?? resources.first(where: { $0.type == .fullSizePhoto })
+        // `.fullSizePhoto` exists only for edited photos and is the version
+        // Photos (and Kuk's thumbnails) show; `.photo` is the unedited original.
+        guard let resource = resources.first(where: { $0.type == .fullSizePhoto })
+                ?? resources.first(where: { $0.type == .photo })
                 ?? resources.first
         else { return nil }
 
         let fm = FileManager.default
-        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // writeData refuses to overwrite, and a partial file from an interrupted
-        // export would otherwise poison the cache entry forever.
+        let folder = url.deletingLastPathComponent()
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
         if fm.fileExists(atPath: url.path) { return url }
 
+        // Written under a temporary name and moved into place only when
+        // complete, so an export interrupted by quitting never leaves a
+        // truncated file that would later pass for a finished one.
+        let partial = folder.appendingPathComponent(".partial-\(UUID().uuidString)")
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
 
         let succeeded = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            PHAssetResourceManager.default().writeData(for: resource, toFile: url, options: options) { error in
+            PHAssetResourceManager.default().writeData(for: resource, toFile: partial, options: options) { error in
                 continuation.resume(returning: error == nil)
             }
         }
-        if !succeeded {
-            try? fm.removeItem(at: url)
-            return nil
+        defer { try? fm.removeItem(at: partial) }
+        guard succeeded else { return nil }
+        do {
+            try fm.moveItem(at: partial, to: url)
+        } catch {
+            // Another export of the same asset may have won the race.
+            return fm.fileExists(atPath: url.path) ? url : nil
+        }
+        // Browsing a big album exports a lot; keep the cache capped during
+        // the session too, not only at launch.
+        if exportCount.increment() % 100 == 0 {
+            Task.detached(priority: .background) { trimCache() }
         }
         return url
     }
@@ -354,8 +442,12 @@ actor PhotosMaterializer {
         var total: Int64 = 0
         for folder in entries {
             guard let files = try? fm.contentsOfDirectory(
-                at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
+                at: folder, includingPropertiesForKeys: keys, options: []
             ) else { continue }
+            // Leftovers of exports interrupted by quitting.
+            for file in files where file.lastPathComponent.hasPrefix(".partial-") {
+                try? fm.removeItem(at: file)
+            }
             var size: Int64 = 0
             var accessed = Date.distantPast
             for file in files {
@@ -372,6 +464,55 @@ actor PhotosMaterializer {
             guard total > maxBytes else { break }
             try? fm.removeItem(at: folder.url)
             total -= folder.size
+        }
+    }
+}
+
+/// A thread-safe counter.
+nonisolated final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    /// Returns the new count.
+    func increment() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
+    }
+}
+
+// MARK: - Change observation
+
+/// Forwards Photos library changes (new photos, edits, album changes) to the
+/// main actor, coalesced so a burst of changes triggers one refresh.
+nonisolated final class PhotosChangeObserver: NSObject, PHPhotoLibraryChangeObserver, @unchecked Sendable {
+    private let onChange: @MainActor @Sendable () -> Void
+    private let lock = NSLock()
+    private var scheduled = false
+
+    init(onChange: @escaping @MainActor @Sendable () -> Void) {
+        self.onChange = onChange
+        super.init()
+        PHPhotoLibrary.shared().register(self)
+    }
+
+    deinit {
+        PHPhotoLibrary.shared().unregisterChangeObserver(self)
+    }
+
+    func photoLibraryDidChange(_ changeInstance: PHChange) {
+        let alreadyScheduled = lock.withLock {
+            let was = scheduled
+            scheduled = true
+            return was
+        }
+        guard !alreadyScheduled else { return }
+        let callback = onChange
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1))
+            self.lock.withLock { self.scheduled = false }
+            callback()
         }
     }
 }

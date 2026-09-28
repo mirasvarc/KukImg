@@ -76,7 +76,8 @@ struct InfoPanel: View {
                                         .font(.caption.weight(.semibold))
                                         .foregroundStyle(.secondary)
                                     ForEach(section.entries) { entry in
-                                        row(entry.key, entry.value)
+                                        // Raw ImageIO keys stay as they are.
+                                        rowView(entry.key, entry.value)
                                     }
                                 }
                             }
@@ -100,8 +101,12 @@ struct InfoPanel: View {
             // Never materializes a Photos asset — PhotoKit answers dimensions,
             // date and GPS directly; full EXIF appears once a file exists.
             self.meta = await ImageLoading.metadata(for: item)
-            if let thumb = await ImageLoading.thumbnail(for: item, pixelSize: 256, scale: scale),
-               !Task.isCancelled {
+            // Any thumbnail already in memory is plenty for a 96×96 resample.
+            var thumb = await ImageLoading.cachedThumbnail(for: item, scale: scale)
+            if thumb == nil {
+                thumb = await ImageLoading.thumbnail(for: item, pointSize: 256, scale: scale)
+            }
+            if let thumb, !Task.isCancelled {
                 histogram = HistogramBuilder.build(from: thumb)
             }
             if showAllMetadata { await loadAllMetadata() }
@@ -148,8 +153,12 @@ struct InfoPanel: View {
         VStack(alignment: .leading, spacing: 6) { content() }
     }
 
+    private func row(_ label: LocalizedStringResource, _ value: String) -> some View {
+        rowView(String(localized: label), value)
+    }
+
     @ViewBuilder
-    private func row(_ label: String, _ value: String) -> some View {
+    private func rowView(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text(label).foregroundStyle(.secondary).font(.caption)
             Spacer(minLength: 8)

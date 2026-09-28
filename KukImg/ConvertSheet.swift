@@ -93,7 +93,7 @@ struct ConvertSheet: View {
             Section {
                 LabeledContent("Save to") {
                     HStack {
-                        Text(destination?.lastPathComponent ?? "Same folder")
+                        Text(destination?.lastPathComponent ?? String(localized: "Same folder"))
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
@@ -187,18 +187,19 @@ struct ConvertSheet: View {
         if animatedCount > 0 {
             result.append(
                 animatedCount == 1
-                    ? "One image is animated — only its first frame is converted."
-                    : "\(animatedCount) images are animated — only their first frame is converted."
+                    ? String(localized: "One image is animated. Only its first frame is converted.")
+                    : String(localized: "\(animatedCount) images are animated. Only their first frame is converted.")
             )
         }
         if !format.supportsAlpha {
-            result.append("\(format.label) has no transparency; transparent areas become white.")
+            let name = format.label
+            result.append(String(localized: "\(name) has no transparency, transparent areas become white."))
         }
         if deleteOriginals {
-            result.append("Originals are moved to the Trash after a successful conversion.")
+            result.append(String(localized: "Originals are moved to the Trash after a successful conversion."))
         }
         if items.contains(where: \.isAsset) {
-            result.append("Photos items are exported to a temporary copy before converting.")
+            result.append(String(localized: "Photos items are exported to a temporary copy before converting."))
         }
         return result
     }
@@ -209,8 +210,8 @@ struct ConvertSheet: View {
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
-        panel.message = "Choose where the converted images are saved."
+        panel.prompt = String(localized: "Choose")
+        panel.message = String(localized: "Choose where the converted images are saved.")
         guard panel.runModal() == .OK else { return }
         destination = panel.url
     }

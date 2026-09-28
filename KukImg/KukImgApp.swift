@@ -72,16 +72,30 @@ struct KukImgApp: App {
                 Button("Copy Image") { model.copyCurrent() }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                     .disabled(model.currentItem == nil)
-                Button("Move to Trash") { model.deleteCurrent() }
-                    .keyboardShortcut(.delete, modifiers: .command)
-                    .disabled(model.currentItem == nil)
+                // While a text field (the filter) is being edited, ⌘⌫ and ⌘A
+                // keep their text meaning instead of acting on the photos.
+                Button("Move to Trash") {
+                    if let editor = Self.activeTextEditor {
+                        editor.deleteToBeginningOfLine(nil)
+                    } else {
+                        model.deleteCurrent()
+                    }
+                }
+                .keyboardShortcut(.delete, modifiers: .command)
+                .disabled(model.currentItem == nil)
                 Button("Show in Finder") { model.revealCurrent() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(model.currentItem == nil)
                 Divider()
-                Button("Select All") { model.selectAll() }
-                    .keyboardShortcut("a", modifiers: .command)
-                    .disabled(model.visibleItems.isEmpty)
+                Button("Select All") {
+                    if let editor = Self.activeTextEditor {
+                        editor.selectAll(nil)
+                    } else {
+                        model.selectAll()
+                    }
+                }
+                .keyboardShortcut("a", modifiers: .command)
+                .disabled(model.visibleItems.isEmpty)
                 Button("Deselect") { model.collapseSelection() }
                     .disabled(!model.hasMultipleSelected)
                 Toggle("Selection Mode", isOn: Binding(
@@ -118,6 +132,23 @@ struct KukImgApp: App {
                     set: { model.groupByFolder = $0 }
                 ))
                 .disabled(!model.includeSubfolders)
+            }
+            CommandMenu("Go") {
+                Button("Next Folder") { model.goToNextFolder() }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                    .disabled(!model.canNavigateFolders)
+                Button("Previous Folder") { model.goToPreviousFolder() }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                    .disabled(!model.canNavigateFolders)
+                Button("Enclosing Folder") {
+                    if let editor = Self.activeTextEditor {
+                        editor.moveToBeginningOfDocument(nil)
+                    } else {
+                        model.goToEnclosingFolder()
+                    }
+                }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                .disabled(!model.canGoToEnclosingFolder)
             }
             CommandMenu("Image") {
                 Button("Rotate Left") { model.rotateCurrent(clockwise: false) }
@@ -157,6 +188,8 @@ struct KukImgApp: App {
                             Text(order.label)
                         }
                     }
+                    // Photos assets report no file size.
+                    .disabled(order.isSizeBased && model.photoAlbum != nil)
                 }
                 Divider()
                 Toggle("Include Subfolders", isOn: Binding(
@@ -179,10 +212,22 @@ struct KukImgApp: App {
     }
 
     private var shareLabel: String {
-        model.hasMultipleSelected ? "Share \(model.selectedIDs.count) Images…" : "Share…"
+        let count = model.selectedIDs.count
+        return model.hasMultipleSelected
+            ? String(localized: "Share \(count) Images…")
+            : String(localized: "Share…")
     }
 
     private var convertLabel: String {
-        model.hasMultipleSelected ? "Convert \(model.selectedIDs.count) Images…" : "Convert…"
+        let count = model.selectedIDs.count
+        return model.hasMultipleSelected
+            ? String(localized: "Convert \(count) Images…")
+            : String(localized: "Convert…")
+    }
+
+    /// The field editor of a text field being edited in the key window.
+    private static var activeTextEditor: NSTextView? {
+        guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isEditable else { return nil }
+        return editor
     }
 }

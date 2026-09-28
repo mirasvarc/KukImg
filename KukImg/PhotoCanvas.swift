@@ -45,16 +45,25 @@ struct ZoomMath {
 
     func label(for mode: ZoomMode) -> String {
         switch mode {
-        case .fit: "Fit · \(Int((fittedZoom * 100).rounded()))%"
-        case .zoom(let z): "\(Int((z * 100).rounded()))%"
+        case .fit:
+            let percent = Int((fittedZoom * 100).rounded())
+            return String(localized: "Fit · \(percent)%")
+        case .zoom(let z):
+            return "\(Int((z * 100).rounded()))%"
         }
     }
 }
 
 /// The image surface shared by DetailView and FullscreenView: progressive
-/// loading (instant 2048px preview → debounced display-size decode → lazy
-/// native decode once zoom needs it), animated GIF playback, zoom & pan, and
-/// display-size prefetching of the neighbours.
+/// loading, animation playback, zoom & pan, and prefetching of the neighbours.
+///
+/// Loading, cheapest first:
+/// 1. a decode already in memory (stepping back, or a prefetched neighbour)
+///    is shown at once, with no debounce;
+/// 2. otherwise the sharpest grid thumbnail in memory bridges the gap;
+/// 3. after a short debounce (so a held arrow key skims instead of decoding
+///    every photo it passes) the photo is decoded to the viewport's size;
+/// 4. the native-resolution decode happens only once zoom needs its pixels.
 struct PhotoCanvas: View {
     @Environment(AppModel.self) private var model
     @Environment(\.displayScale) private var scale
@@ -66,13 +75,25 @@ struct PhotoCanvas: View {
 
     @State private var fullImage: NSImage?
     @State private var preview: NSImage?
-    /// Set for multi-frame images (GIF); playback happens in the AppKit layer.
+    /// Set for animations; playback happens in the AppKit layer.
     @State private var animatedURL: URL?
-    /// True while `fullImage` is a display-size decode of a larger original.
-    @State private var fullImageIsCapped = false
-    /// Set when the current zoom outresolves the capped decode; drives the
-    /// lazy native-size decode task.
+    @State private var animationChecked = false
+    /// Longest side, in pixels, that `fullImage` resolves; infinite once native.
+    @State private var decodedLongest: CGFloat = 0
+    /// Decode size the viewport calls for (0 until it has been laid out).
+    @State private var tier = 0
+    /// The item the current state belongs to.
+    @State private var loadedItem: ImageItem?
+    /// Set when the current zoom outresolves the decode; drives the lazy
+    /// native-size decode task.
     @State private var nativeRequest: ImageItem?
+
+    private struct LoadKey: Hashable {
+        let item: ImageItem
+        let tier: Int
+    }
+
+    private static let native = CGFloat.greatestFiniteMagnitude
 
     var body: some View {
         ZStack {
@@ -99,100 +120,140 @@ struct PhotoCanvas: View {
                     .tint(backgroundColor == .black ? Color.white : nil)
             }
         }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            tier = DecodeTier.forViewport(size, scale: scale)
+        }
         .onChange(of: zoomMode) { _, _ in requestNativeIfNeeded() }
         .task(id: nativeRequest) {
             guard let target = nativeRequest else { return }
             let img = await ImageLoading.fullImage(for: target)
-            if !Task.isCancelled, let img {
+            if !Task.isCancelled, let img, loadedItem == target {
                 fullImage = img
-                fullImageIsCapped = false
+                decodedLongest = Self.native
             }
         }
         // Keyed on the whole item (not just the URL) so an externally modified
-        // file reloads — the item's modifiedAt changes on rescan.
-        .task(id: item) { await load() }
+        // file reloads — the item's modifiedAt changes on rescan — and on the
+        // tier, so growing the window (or entering fullscreen) sharpens it.
+        .task(id: LoadKey(item: item, tier: tier)) { await load() }
     }
 
     private func documentPointSize(fallback image: NSImage) -> CGSize {
         if let px = pixelSize, px.width > 0, px.height > 0 {
             return CGSize(width: px.width / scale, height: px.height / scale)
         }
-        return image.size
+        // Pixel dimensions not known yet: size the document from the bitmap.
+        let px = image.pixelLongestSide
+        let pts = max(image.size.width, image.size.height)
+        guard px > 0, pts > 0 else { return image.size }
+        let factor = px / pts / scale
+        return CGSize(width: image.size.width * factor, height: image.size.height * factor)
     }
 
     private func load() async {
-        zoomMode = .fit
-        fullImage = nil
-        preview = nil
-        pixelSize = nil
-        animatedURL = nil
-        fullImageIsCapped = false
-        nativeRequest = nil
+        let target = item
+        let cap = tier
+        if loadedItem != target {
+            loadedItem = target
+            zoomMode = .fit
+            fullImage = nil
+            preview = nil
+            pixelSize = nil
+            animatedURL = nil
+            animationChecked = false
+            decodedLongest = 0
+            nativeRequest = nil
+        }
+        guard animatedURL == nil else { return }
 
-        preview = await ImageLoading.thumbnail(for: item, pixelSize: 2048, scale: scale)
-
-        // Debounce the expensive part: while an arrow key is held, skim on the
-        // instant previews instead of decoding (and for Photos assets
-        // exporting) every photo the selection merely passes.
-        try? await Task.sleep(for: .milliseconds(150))
-        guard !Task.isCancelled else { return }
-
-        if let meta = await ImageLoading.metadata(for: item),
+        // 1. Already decoded: show it right away.
+        if cap > 0, !isResolved(cap),
+           let cached = await ImageLoading.cachedDisplayImage(for: target, cap: cap) {
+            guard !Task.isCancelled else { return }
+            show(cached, cap: cap)
+        }
+        // 2. Nothing big enough yet: a smaller decode or the best thumbnail
+        //    in memory, or a quick thumbnail.
+        if fullImage == nil, preview == nil {
+            var thumb = await ImageLoading.largestCachedDisplayImage(for: target)
+            if thumb == nil {
+                thumb = await ImageLoading.cachedThumbnail(for: target, scale: scale)
+            }
+            if thumb == nil {
+                thumb = await ImageLoading.thumbnail(for: target, pointSize: 512, scale: scale)
+            }
+            guard !Task.isCancelled else { return }
+            preview = thumb
+        }
+        if pixelSize == nil, let meta = await ImageLoading.metadata(for: target),
            let w = meta.pixelWidth, let h = meta.pixelHeight {
+            guard !Task.isCancelled else { return }
             pixelSize = CGSize(width: w, height: h)
         }
+        guard cap > 0 else { return }
 
-        // Photos assets are exported on first use; everything after this point
-        // works on a real file just like a folder item does.
-        guard let url = await ImageLoading.fileURL(for: item), !Task.isCancelled else { return }
-
-        // Multi-frame images go to the AppKit layer as a file URL — NSImageView
-        // plays GIF frames itself; a single decoded frame would freeze them.
-        if await Self.isAnimated(url) {
-            animatedURL = url
-            return
+        let needsDecode = !isResolved(cap)
+        if needsDecode {
+            // 3. Debounce, then decode at viewport size.
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
         }
-
-        let budget = DisplayBudget.maxPixelSize
-        let img = await FullImageCache.shared.image(
-            for: url, modifiedAt: item.modifiedAt, maxPixelSize: budget
-        )
-        if !Task.isCancelled, let img {
-            fullImage = img
-            if let px = pixelSize {
-                fullImageIsCapped = max(px.width, px.height) > budget
-            } else {
-                pixelSize = img.size
+        // Checked even when a decode came from the cache: the neighbour
+        // prefetch decodes an animation's first frame like any still image.
+        if !animationChecked {
+            let url = await ImageLoading.animationURL(for: target)
+            guard !Task.isCancelled else { return }
+            animationChecked = true
+            if let url {
+                animatedURL = url
+                return
             }
-            // The user may have zoomed in while the decode was running.
-            requestNativeIfNeeded()
         }
+        if needsDecode {
+            guard let img = await ImageLoading.displayImage(for: target, cap: cap),
+                  !Task.isCancelled else { return }
+            show(img, cap: cap)
+        }
+        // The user may have zoomed in while the decode was running.
+        requestNativeIfNeeded()
+        await prefetchNeighbours(of: target, cap: cap)
+    }
 
-        // Warm the neighbours at display size so the next arrow press is
-        // instant — forward first, since browsing mostly moves ahead.
-        guard !Task.isCancelled, let idx = model.currentIndex else { return }
-        if idx + 1 < model.visibleItems.count {
-            _ = await ImageLoading.fullImage(for: model.visibleItems[idx + 1], maxPixelSize: budget)
-        }
-        if idx > 0 {
-            _ = await ImageLoading.fullImage(for: model.visibleItems[idx - 1], maxPixelSize: budget)
+    private func show(_ image: NSImage, cap: Int) {
+        fullImage = image
+        let longest = image.pixelLongestSide
+        // A decode that came out smaller than asked for is the whole image.
+        decodedLongest = longest < CGFloat(cap) - 1 ? Self.native : longest
+        if pixelSize == nil, decodedLongest == Self.native {
+            pixelSize = image.pixelDimensions
         }
     }
 
-    /// The capped display-size decode ran out of pixels for the current zoom —
-    /// fetch the native-size decode lazily.
+    private func isResolved(_ cap: Int) -> Bool {
+        fullImage != nil && decodedLongest >= CGFloat(cap) - 1
+    }
+
+    /// Warms the neighbours at the same size so the next arrow press is
+    /// instant, forward first since browsing mostly moves ahead.
+    private func prefetchNeighbours(of target: ImageItem, cap: Int) async {
+        guard let idx = model.index(of: target.id) else { return }
+        let items = model.visibleItems
+        for offset in [1, 2, -1] {
+            guard !Task.isCancelled else { return }
+            let neighbour = idx + offset
+            guard items.indices.contains(neighbour) else { continue }
+            _ = await ImageLoading.displayImage(for: items[neighbour], cap: cap)
+        }
+    }
+
+    /// The decode ran out of pixels for the current zoom — fetch the
+    /// native-size decode lazily.
     private func requestNativeIfNeeded() {
-        guard fullImageIsCapped, case .zoom(let z) = zoomMode, let px = pixelSize else { return }
-        if z * max(px.width, px.height) > DisplayBudget.maxPixelSize {
+        guard fullImage != nil, decodedLongest < Self.native,
+              case .zoom(let z) = zoomMode, let px = pixelSize else { return }
+        if z * max(px.width, px.height) > decodedLongest * 1.05 {
             nativeRequest = item
         }
-    }
-
-    nonisolated private static func isAnimated(_ url: URL) async -> Bool {
-        await Task.detached(priority: .userInitiated) {
-            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return false }
-            return CGImageSourceGetCount(src) > 1
-        }.value
     }
 }
 
@@ -229,7 +290,7 @@ private struct ZoomableImageView: NSViewRepresentable {
 
         let imageView = PannableImageView()
         imageView.imageScaling = .scaleAxesIndependently
-        imageView.animates = true
+        imageView.animates = false
         scroll.documentView = imageView
 
         context.coordinator.attach(to: scroll)
@@ -238,6 +299,10 @@ private struct ZoomableImageView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.update(scroll: scroll, view: self)
+    }
+
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        coordinator.stopAnimation()
     }
 
     final class Coordinator: NSObject {
@@ -252,6 +317,7 @@ private struct ZoomableImageView: NSViewRepresentable {
         /// Non-zero while the coordinator itself changes the scroll view, so
         /// the resulting notifications aren't echoed back into the binding.
         private var programmaticDepth = 0
+        private var animation: AnimationPlayer?
 
         func attach(to scroll: NSScrollView) {
             self.scroll = scroll
@@ -288,11 +354,9 @@ private struct ZoomableImageView: NSViewRepresentable {
                 ?? AnyHashable(ObjectIdentifier(view.image))
             if contentKey != key {
                 contentKey = key
-                if let url = view.animatedURL, let animated = NSImage(contentsOf: url) {
-                    imageView.image = animated
-                } else {
-                    imageView.image = view.image
-                }
+                stopAnimation()
+                imageView.image = view.image
+                if let url = view.animatedURL { startAnimation(url, in: imageView) }
             }
             if imageView.frame.size != view.pointSize {
                 imageView.frame = NSRect(origin: .zero, size: view.pointSize)
@@ -308,6 +372,22 @@ private struct ZoomableImageView: NSViewRepresentable {
                     scroll.setMagnification(z, centeredAt: visibleCenter)
                 }
             }
+        }
+
+        /// Plays GIF, APNG and animated WebP/HEICS frame by frame. ImageIO
+        /// decodes the frames itself, so even a huge animation never loads on
+        /// the main thread in one go.
+        private func startAnimation(_ url: URL, in imageView: NSImageView) {
+            let player = AnimationPlayer(imageView: imageView)
+            animation = player
+            CGAnimateImageAtURLWithBlock(url as CFURL, nil) { _, frame, stop in
+                if !player.show(frame) { stop.pointee = true }
+            }
+        }
+
+        func stopAnimation() {
+            animation?.stop()
+            animation = nil
         }
 
         private func applyFit() {
@@ -338,7 +418,7 @@ private struct ZoomableImageView: NSViewRepresentable {
         /// Fires on every scroll/pan/magnification change; forwards genuine
         /// zoom changes (live pinch included) into the SwiftUI binding.
         @objc private func scrollContentChanged(_ note: Notification) {
-            guard programmaticDepth == 0, let scroll, view != nil else { return }
+            guard programmaticDepth == 0, let scroll, let view else { return }
             let mag = scroll.magnification
             if isFit {
                 if scroll.contentSize != fitContentSize {
@@ -348,8 +428,8 @@ private struct ZoomableImageView: NSViewRepresentable {
                 guard let fitMag = fitMagnification, abs(mag - fitMag) > 0.005 else { return }
                 isFit = false
             }
-            if case .zoom(let z) = view!.zoom, abs(z - mag) < 0.001 { return }
-            view?.zoom = .zoom(mag)
+            if case .zoom(let z) = view.zoom, abs(z - mag) < 0.001 { return }
+            view.zoom = .zoom(mag)
         }
 
         @objc private func containerResized(_ note: Notification) {
@@ -371,6 +451,41 @@ private struct ZoomableImageView: NSViewRepresentable {
             let bounds = scroll.contentView.bounds
             return NSPoint(x: bounds.midX, y: bounds.midY)
         }
+    }
+}
+
+/// Receives animation frames from ImageIO and tells it to stop once the view
+/// shows something else.
+nonisolated private final class AnimationPlayer: @unchecked Sendable {
+    private weak var imageView: NSImageView?
+    private var stopped = false
+    private let lock = NSLock()
+
+    init(imageView: NSImageView) {
+        self.imageView = imageView
+    }
+
+    func stop() {
+        lock.lock()
+        stopped = true
+        lock.unlock()
+    }
+
+    /// Returns false when playback should end.
+    func show(_ frame: CGImage) -> Bool {
+        lock.lock()
+        let isStopped = stopped
+        lock.unlock()
+        guard !isStopped else { return false }
+        let image = NSImage(cgImage: frame, size: .zero)
+        let apply: @Sendable () -> Void = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let view = self?.imageView else { return }
+                view.image = image
+            }
+        }
+        if Thread.isMainThread { apply() } else { DispatchQueue.main.async(execute: apply) }
+        return true
     }
 }
 

@@ -9,6 +9,9 @@ struct ImageGridView: View {
     @State private var containerWidth: CGFloat = 0
     @State private var visibleRect: CGRect = .zero
     @State private var lastScroll = Date.distantPast
+    /// Warms thumbnails of the rows just outside the viewport while scrolling.
+    @State private var scrollPrefetcher = Prefetcher()
+    @State private var prefetchedRows: ClosedRange<Int>?
     @FocusState private var focused: Bool
     @Environment(\.displayScale) private var scale
     @AppStorage("showFilenames") private var showFilenames = false
@@ -57,17 +60,22 @@ struct ImageGridView: View {
             .focusEffectDisabled()
             .focused($focused)
             .onAppear { focused = true }
+            // ⌘/⌥ arrows belong to the Go menu (folder navigation).
             .onKeyPress(.leftArrow, phases: .down)  { press in
-                horizontal(-1, extend: press.modifiers.contains(.shift))
+                guard !press.modifiers.hasMenuModifier else { return .ignored }
+                return horizontal(-1, extend: press.modifiers.contains(.shift))
             }
             .onKeyPress(.rightArrow, phases: .down) { press in
-                horizontal(1, extend: press.modifiers.contains(.shift))
+                guard !press.modifiers.hasMenuModifier else { return .ignored }
+                return horizontal(1, extend: press.modifiers.contains(.shift))
             }
             .onKeyPress(.upArrow, phases: .down)    { press in
-                vertical(-1, extend: press.modifiers.contains(.shift))
+                guard !press.modifiers.hasMenuModifier else { return .ignored }
+                return vertical(-1, extend: press.modifiers.contains(.shift))
             }
             .onKeyPress(.downArrow, phases: .down)  { press in
-                vertical(1, extend: press.modifiers.contains(.shift))
+                guard !press.modifiers.hasMenuModifier else { return .ignored }
+                return vertical(1, extend: press.modifiers.contains(.shift))
             }
             .onKeyPress(.home)       { model.selectFirst(); return .handled }
             .onKeyPress(.end)        { model.selectLast();  return .handled }
@@ -94,11 +102,32 @@ struct ImageGridView: View {
             }
             .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, new in
                 visibleRect = new
+                prefetchAroundViewport()
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
                 containerWidth = $0
             }
+            .onDisappear { scrollPrefetcher.cancelAll() }
         }
+    }
+
+    /// Requests thumbnails for a few rows below and one above the viewport,
+    /// cancelling what scrolled out of range. With sections the row estimate
+    /// ignores headers, which is fine for a margin.
+    private func prefetchAroundViewport() {
+        let items = model.visibleItems
+        guard visibleRect.height > 0, !items.isEmpty else { return }
+        let rowHeight = cellHeight + spacing
+        let firstVisible = max(0, Int((visibleRect.minY - padding) / rowHeight))
+        let lastVisible = max(firstVisible, Int((visibleRect.maxY - padding) / rowHeight))
+        let rows = max(0, firstVisible - 1)...(lastVisible + 3)
+        guard rows != prefetchedRows else { return }
+        prefetchedRows = rows
+        let cols = columnCount
+        let lo = min(items.count, rows.lowerBound * cols)
+        let hi = min(items.count, (rows.upperBound + 1) * cols)
+        guard lo < hi else { return }
+        scrollPrefetcher.prefetch(Array(items[lo..<hi]), pointSize: thumbSize, scale: scale)
     }
 
     @ViewBuilder
@@ -254,38 +283,8 @@ struct ImageGridView: View {
     /// Moves one visual row, keeping the column — section headers mean rows
     /// can't be derived from a flat index once the grid is grouped.
     private func vertical(_ direction: Int, extend: Bool) -> KeyPress.Result {
-        let rows = makeRows()
-        guard let current = model.selection,
-              let rowIndex = rows.firstIndex(where: { $0.contains(current) })
-        else {
-            model.selectFirst()
-            return .handled
-        }
-        let column = rows[rowIndex].firstIndex(of: current) ?? 0
-        let target = rowIndex + direction
-        guard rows.indices.contains(target) else {
-            let edge = direction < 0 ? model.visibleItems.first?.id : model.visibleItems.last?.id
-            if let edge { model.select(edge, extending: extend) }
-            return .handled
-        }
-        let row = rows[target]
-        model.select(row[min(column, row.count - 1)], extending: extend)
+        model.moveVertically(by: direction, columns: columnCount, extend: extend)
         return .handled
-    }
-
-    private func makeRows() -> [[ImageItem.ID]] {
-        let cols = max(1, columnCount)
-        let blocks = isGrouped ? model.groups.map(\.items) : [model.visibleItems]
-        var rows: [[ImageItem.ID]] = []
-        for block in blocks {
-            var index = 0
-            while index < block.count {
-                let end = min(index + cols, block.count)
-                rows.append(block[index..<end].map(\.id))
-                index = end
-            }
-        }
-        return rows
     }
 
     /// Scrolls only when the selected cell is outside the viewport, and skips
@@ -294,7 +293,7 @@ struct ImageGridView: View {
     /// minimal scrolling takes over.
     private func ensureVisible(_ id: ImageItem.ID, proxy: ScrollViewProxy) {
         if !isGrouped {
-            guard let idx = model.visibleItems.firstIndex(where: { $0.id == id }) else { return }
+            guard let idx = model.index(of: id) else { return }
             let row = idx / columnCount
             let rowHeight = cellHeight + spacing
             let minY = padding + CGFloat(row) * rowHeight
@@ -351,7 +350,7 @@ struct ThumbnailCell: View {
         // version while the old image stays visible (no flash back to spinner).
         // And on modifiedAt, so an externally overwritten file re-renders.
         .task(id: "\(item.id.path)|\(item.modifiedAt.timeIntervalSince1970)|\(bucket)") {
-            if let img = await ImageLoading.thumbnail(for: item, pixelSize: bucket, scale: scale) {
+            if let img = await ImageLoading.thumbnail(for: item, pointSize: bucket, scale: scale) {
                 image = img
             }
         }
@@ -368,7 +367,11 @@ struct ThumbnailCell: View {
                     .scaledToFit()
                     .padding(3)
             } else {
-                ProgressView().controlSize(.small)
+                // A static glyph: hundreds of spinning ProgressViews while a
+                // screenful of thumbnails loads cost real frame time.
+                Image(systemName: "photo")
+                    .font(.title3)
+                    .foregroundStyle(.tertiary)
             }
         }
         .frame(width: size, height: size)
@@ -480,6 +483,11 @@ struct OpenWithMenu: View {
             }
         }
     }
+}
+
+extension EventModifiers {
+    /// ⌘ or ⌥ held: the key press is meant for a menu command.
+    var hasMenuModifier: Bool { contains(.command) || contains(.option) }
 }
 
 /// Photos assets have no file on disk until they are exported, so only real

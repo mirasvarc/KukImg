@@ -3,6 +3,8 @@ import SwiftUI
 struct StatusBar: View {
     let item: ImageItem?
     var selectedCount: Int = 0
+    /// A background copy/move in progress.
+    var activity: Activity?
     @State private var meta: ImageMetadata?
 
     var body: some View {
@@ -13,7 +15,20 @@ struct StatusBar: View {
                     Text("\(selectedCount) selected")
                         .foregroundStyle(.tint)
                 }
-                Spacer()
+            } else {
+                Text(" ")
+            }
+            if let activity {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(activity.completed), total: Double(max(activity.total, 1)))
+                        .progressViewStyle(.linear)
+                        .frame(width: 80)
+                    Text("\(activity.title) \(activity.completed) / \(activity.total)")
+                        .monospacedDigit()
+                }
+            }
+            Spacer()
+            if item != nil {
                 if let w = meta?.pixelWidth, let h = meta?.pixelHeight {
                     Text("\(w) × \(h)")
                 }
@@ -23,8 +38,6 @@ struct StatusBar: View {
                 if let size = meta?.fileSize {
                     Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
                 }
-            } else {
-                Text(" ")
             }
         }
         .font(.caption)

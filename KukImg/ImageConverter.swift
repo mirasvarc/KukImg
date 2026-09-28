@@ -80,9 +80,9 @@ nonisolated enum ConversionError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unreadable:     "Could not read the image."
-        case .encodingFailed: "Could not write the converted image."
-        case .noDestination:  "The destination folder is not writable."
+        case .unreadable:     String(localized: "Could not read the image.")
+        case .encodingFailed: String(localized: "Could not write the converted image.")
+        case .noDestination:  String(localized: "The destination folder is not writable.")
         }
     }
 }
@@ -281,7 +281,7 @@ final class ConversionJob {
                     sources.append((url, !item.isAsset))
                 } else {
                     self.record(ConversionResult(
-                        source: item.url, output: nil, error: "Could not export from Photos."
+                        source: item.url, output: nil, error: String(localized: "Could not export from Photos.")
                     ))
                 }
             }
