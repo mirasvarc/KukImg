@@ -42,6 +42,15 @@ nonisolated struct ImageGroup: Identifiable, Hashable, Sendable {
     var id: URL { folder }
 }
 
+/// A folder tile shown above the images when "Show folders in the grid" is on:
+/// either a subfolder of the displayed folder or the ".." tile leading up.
+nonisolated struct GridFolder: Identifiable, Hashable, Sendable {
+    let url: URL
+    let isParent: Bool
+    var id: URL { url }
+    var name: String { isParent ? ".." : url.lastPathComponent }
+}
+
 /// A pending "Convert…" sheet. `id` is fresh per request so asking twice for
 /// the same images still re-presents the sheet.
 nonisolated struct ConvertRequest: Identifiable, Sendable {
@@ -127,6 +136,7 @@ final class AppModel {
     /// The focused item — drives the detail view, fullscreen and the status bar.
     var selection: ImageItem.ID? {
         didSet {
+            if selection != nil { focusedFolder = nil }
             guard !isSyncingSelection else { return }
             selectedIDs = selection.map { [$0] } ?? []
             selectionAnchor = selection
@@ -161,6 +171,17 @@ final class AppModel {
             updateVisibleItems()
         }
     }
+    var showFoldersInGrid: Bool {
+        didSet {
+            UserDefaults.standard.set(showFoldersInGrid, forKey: "showFoldersInGrid")
+            reloadGridFolders()
+        }
+    }
+    /// Folder tile focused in the grid. Mutually exclusive with `selection`,
+    /// so a focused folder leaves the detail view empty.
+    var focusedFolder: URL?
+    /// Folder tiles of the displayed folder, before the name filter.
+    private(set) var folderTiles: [GridFolder] = []
     var recents: [RecentFolder] = []
     let photos = PhotosLibraryModel()
     /// Non-nil while the conversion sheet should be up.
@@ -207,6 +228,8 @@ final class AppModel {
     /// wherever the previous one went.
     private var folderNavigation: Task<Void, Never>?
 
+    private var folderTilesTask: Task<Void, Never>?
+
     private var folderWatcher: FolderWatcher?
     private var rescanDebounce: Task<Void, Never>?
 
@@ -216,6 +239,7 @@ final class AppModel {
         self.includeSubfolders = UserDefaults.standard.bool(forKey: "includeSubfolders")
         // Default is true; bool(forKey:) alone would default to false.
         self.groupByFolder = UserDefaults.standard.object(forKey: "groupByFolder") as? Bool ?? true
+        self.showFoldersInGrid = UserDefaults.standard.bool(forKey: "showFoldersInGrid")
         self.recents = RecentFolders.all()
         photos.onLibraryChange = { [weak self] in self?.refreshPhotoAlbum() }
     }
@@ -404,30 +428,146 @@ final class AppModel {
         selection = visibleItems[new].id
     }
 
-    func extendSelection(by offset: Int) {
-        guard !visibleItems.isEmpty else { return }
-        let cur = currentIndex ?? 0
-        let new = (cur + offset).clamped(to: 0...(visibleItems.count - 1))
-        select(visibleItems[new].id, extending: true)
+    func selectFirst() { selection = visibleItems.first?.id }
+    func selectLast()  { selection = visibleItems.last?.id }
+
+    // MARK: - Grid navigation
+
+    /// Folder tiles as the grid shows them: the name filter applies to
+    /// subfolders, the ".." tile always stays.
+    var gridFolders: [GridFolder] {
+        guard !filterText.isEmpty else { return folderTiles }
+        return folderTiles.filter { $0.isParent || $0.name.localizedCaseInsensitiveContains(filterText) }
+    }
+
+    /// Position in the grid's tile sequence: folder tiles first, then images.
+    private var gridPosition: Int? {
+        let folders = gridFolders
+        if let focused = focusedFolder, let i = folders.firstIndex(where: { $0.url == focused }) {
+            return i
+        }
+        return currentIndex.map { $0 + folders.count }
+    }
+
+    private func focusGridTile(at position: Int, extending: Bool) {
+        let folders = gridFolders
+        if position < folders.count {
+            focusFolder(folders[position].url)
+        } else {
+            // A range can't start on a folder tile, so from there it's a plain move.
+            select(visibleItems[position - folders.count].id, extending: extending && focusedFolder == nil)
+        }
+    }
+
+    /// Arrow keys in the grid walk folder tiles and images as one sequence.
+    /// With nothing focused (after Escape) any move starts at the first tile.
+    func moveInGrid(by offset: Int, extend: Bool = false) {
+        let total = gridFolders.count + visibleItems.count
+        guard total > 0 else { return }
+        guard let current = gridPosition else {
+            focusGridTile(at: 0, extending: false)
+            return
+        }
+        focusGridTile(at: (current + offset).clamped(to: 0...(total - 1)), extending: extend)
     }
 
     /// Moves one visual row up or down in a grid of `columns`, keeping the
-    /// column. Section headers restart the rows, so the math runs per section.
-    func moveVertically(by direction: Int, columns: Int, extend: Bool) {
-        guard !visibleItems.isEmpty else { return }
-        guard let current = currentIndex else {
-            selectFirst()
+    /// column. Folder tiles and section headers restart the rows, so the math
+    /// runs per section.
+    func moveVerticallyInGrid(by direction: Int, columns: Int, extend: Bool) {
+        let folderCount = gridFolders.count
+        let total = folderCount + visibleItems.count
+        guard total > 0 else { return }
+        guard let current = gridPosition else {
+            focusGridTile(at: 0, extending: false)
             return
         }
+        var starts = folderCount > 0 ? [0] : []
+        if !visibleItems.isEmpty { starts += groupStarts.map { $0 + folderCount } }
         let target = GridMath.verticalTarget(
             from: current, direction: direction, columns: columns,
-            groupStarts: groupStarts, total: visibleItems.count
+            groupStarts: starts, total: total
         )
-        select(visibleItems[target].id, extending: extend)
+        focusGridTile(at: target, extending: extend)
     }
 
-    func selectFirst() { selection = visibleItems.first?.id }
-    func selectLast()  { selection = visibleItems.last?.id }
+    func selectFirstInGrid() {
+        guard !gridFolders.isEmpty || !visibleItems.isEmpty else { return }
+        focusGridTile(at: 0, extending: false)
+    }
+
+    func selectLastInGrid() {
+        let total = gridFolders.count + visibleItems.count
+        guard total > 0 else { return }
+        focusGridTile(at: total - 1, extending: false)
+    }
+
+    /// Focuses a folder tile; the detail view goes empty meanwhile.
+    func focusFolder(_ url: URL) {
+        selection = nil
+        focusedFolder = url
+    }
+
+    /// Return / Space in the grid: opens the focused folder, or the viewer.
+    func openFocusedTile() {
+        // A folder hidden by the name filter stays focused but isn't opened.
+        if let focused = focusedFolder, gridFolders.contains(where: { $0.url == focused }) {
+            display(folder: focused)
+        } else if currentItem != nil {
+            isFullscreen = true
+        }
+    }
+
+    /// Escape steps back one level at a time: leaves the viewer, then drops a
+    /// multi-selection, then Select mode, and finally closes the open photo.
+    /// Returns false when there was nothing left to close.
+    func handleEscape() -> Bool {
+        if isFullscreen {
+            isFullscreen = false
+        } else if hasMultipleSelected {
+            collapseSelection()
+        } else if isSelectMode {
+            isSelectMode = false
+        } else if selection != nil || focusedFolder != nil {
+            selection = nil
+            focusedFolder = nil
+        } else {
+            return false
+        }
+        return true
+    }
+
+    /// Lists the folder tiles for the displayed folder off the main thread.
+    /// Follows the sidebar's "Hide folders without images" preference.
+    func reloadGridFolders() {
+        folderTilesTask?.cancel()
+        guard showFoldersInGrid, let url = folder else {
+            folderTiles = []
+            focusedFolder = nil
+            return
+        }
+        let parent = canGoToEnclosingFolder ? url.deletingLastPathComponent() : nil
+        let hideEmpty = UserDefaults.standard.bool(forKey: "hideEmptyFolders")
+        folderTilesTask = Task {
+            var subfolders = await Task.detached(priority: .userInitiated) {
+                FolderListing.subfolders(of: url)
+            }.value
+            if hideEmpty {
+                var kept: [URL] = []
+                for sub in subfolders {
+                    if await FolderIndex.shared.containsImages(sub) { kept.append(sub) }
+                }
+                subfolders = kept
+            }
+            guard !Task.isCancelled, self.folder == url else { return }
+            var tiles = parent.map { [GridFolder(url: $0, isParent: true)] } ?? []
+            tiles += subfolders.map { GridFolder(url: $0, isParent: false) }
+            if tiles != self.folderTiles { self.folderTiles = tiles }
+            if let focused = self.focusedFolder, !tiles.contains(where: { $0.url == focused }) {
+                self.focusedFolder = nil
+            }
+        }
+    }
 
     // MARK: - Folders
 
@@ -531,6 +671,8 @@ final class AppModel {
         self.folder = url
         self.items = []
         self.selection = nil
+        self.focusedFolder = nil
+        self.folderTiles = []
         // A dropped file's explicit selection wins over the remembered one.
         if pendingSelection == nil { pendingSelection = rememberedSelections[url.path] }
         prefetcher.cancelAll()
@@ -574,6 +716,7 @@ final class AppModel {
         photoAlbum = nil
         items = []
         selection = nil
+        reloadGridFolders()
         prefetcher.cancelAll()
         folderWatcher = nil
     }
@@ -645,6 +788,7 @@ final class AppModel {
         photoAlbum = album
         items = []
         selection = nil
+        reloadGridFolders()
         prefetcher.cancelAll()
         loadPhotos(album, keeping: rememberedSelections[album.id])
     }
@@ -677,6 +821,9 @@ final class AppModel {
             }
             self.flags = updated
 
+            // Only a fresh load picks the first image; a library refresh
+            // keeps "nothing selected" after Escape.
+            let initialLoad = self.isLoading
             self.isLoading = false
             self.items = sorted
             if let wanted, self.index(of: wanted) != nil {
@@ -684,7 +831,7 @@ final class AppModel {
             } else if let wantedAsset,
                       let match = sorted.first(where: { $0.assetIdentifier == wantedAsset }) {
                 self.selection = match.id
-            } else if self.selection == nil {
+            } else if self.selection == nil, initialLoad {
                 self.selection = self.visibleItems.first?.id
             }
             if order != self.sortOrder { self.applySort() }
@@ -702,6 +849,7 @@ final class AppModel {
         let order = sortOrder
         let recursive = includeSubfolders
         if items.isEmpty { isLoading = true }
+        reloadGridFolders()
 
         // Cancel the previous walk — switching away from a huge tree should
         // stop the old scan, not let it run to completion for nothing.
@@ -739,11 +887,15 @@ final class AppModel {
         }
         if updated != flags { flags = updated }
 
+        // Only a fresh load picks the first image; a rescan from the folder
+        // watcher keeps "nothing selected" after Escape. A selection whose
+        // file disappeared is already moved on by updateVisibleItems.
+        let initialLoad = isLoading
         isLoading = false
         items = result
         if let pending = pendingSelection, index(of: pending) != nil {
             selection = pending
-        } else if selection == nil || index(of: selection!) == nil {
+        } else if selection == nil, initialLoad, focusedFolder == nil {
             selection = visibleItems.first?.id
         }
         pendingSelection = nil

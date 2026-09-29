@@ -673,6 +673,16 @@
         }
       }
     },
+    "Count images in subfolders too" : {
+      "localizations" : {
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Započítat i obrázky v podsložkách"
+          }
+        }
+      }
+    },
     "Date Taken (Newest)" : {
       "localizations" : {
         "cs" : {
@@ -1825,6 +1835,16 @@
         }
       }
     },
+    "Show folders in the grid" : {
+      "localizations" : {
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zobrazovat složky v mřížce"
+          }
+        }
+      }
+    },
     "Show in Finder" : {
       "localizations" : {
         "cs" : {
@@ -1967,6 +1987,16 @@
         }
       }
     },
+    "Subfolders and a “..” tile for the enclosing folder appear before the images." : {
+      "localizations" : {
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Podsložky a dlaždice „..“ pro nadřazenou složku se zobrazí před obrázky."
+          }
+        }
+      }
+    },
     "Taken" : {
       "localizations" : {
         "cs" : {
@@ -1993,6 +2023,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Název je prázdný."
+          }
+        }
+      }
+    },
+    "The number next to a folder includes images in all of its subfolders." : {
+      "localizations" : {
+        "cs" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Číslo u složky zahrnuje obrázky ve všech jejích podsložkách."
           }
         }
       }

@@ -75,7 +75,6 @@ struct FullscreenView: View {
         }
         .onKeyPress(.home)       { navigate { model.selectFirst() } }
         .onKeyPress(.end)        { navigate { model.selectLast() } }
-        .onKeyPress(.escape)     { model.isFullscreen = false; return .handled }
         .onKeyPress(.return)     { model.isFullscreen = false; return .handled }
         .onKeyPress(.space)      { toggleSlideshow(); return .handled }
         .onKeyPress("p")         { flag(.pick) }

@@ -36,8 +36,8 @@ Designed for flipping through large folders of photos with zero friction — thu
 - **Live folder watching** — files added or removed in Finder show up automatically
 - **Finder integration** — drag & drop a folder (or a single image) in, drag images out, reveal in Finder, copy (file + bitmap), Open With menu, move to Trash with Undo
 - **Open With** — registers as a viewer for images and folders, so it appears in Finder's Open With menu and can be set as the default image viewer (Get Info → Open with → Change All…)
-- **Folder tree** — sidebar shows each open folder as a lazily loaded tree of its subfolders with per-folder image counts; multiple folders can be open at once (Add Folder… button, multi-select in the open panel) and closed individually
-- **Folder navigation** — jump to the next or previous folder that contains images (⌥⌘↓ / ⌥⌘↑) and to the enclosing folder (⌘↑) straight from the keyboard, also in fullscreen; the sidebar follows along
+- **Folder tree** — sidebar shows each open folder as a lazily loaded tree of its subfolders with per-folder image counts (optionally including all subfolders); multiple folders can be open at once (Add Folder… button, multi-select in the open panel) and closed individually
+- **Folder navigation** — jump to the next or previous folder that contains images (⌥⌘↓ / ⌥⌘↑) and to the enclosing folder (⌘↑) straight from the keyboard, also in fullscreen; the sidebar follows along; optionally, subfolders and a “..” tile show up as tiles at the top of the grid and open with a double-click or Return
 - **Settings** (⌘,) — startup, thumbnail and slideshow options, plus app info and update check
 - **Recent folders** — sidebar and File → Open Recent, restored across launches via security-scoped bookmarks (the app is sandboxed); individual entries removable from the sidebar
 - **Localized** — English and Czech
@@ -52,8 +52,8 @@ Designed for flipping through large folders of photos with zero friction — thu
 | Page Up / Page Down | Move by one screen of rows (fullscreen: previous / next image) |
 | ⌥⌘↓ / ⌥⌘↑ | Next / previous folder with images |
 | ⌘↑ | Enclosing folder |
-| Return / Space | Open fullscreen |
-| Esc | Leave fullscreen / collapse selection |
+| Return / Space | Open fullscreen (on a folder tile: open the folder) |
+| Esc | Leave fullscreen / collapse selection / close the open photo |
 | Space (fullscreen) | Toggle slideshow |
 | P / X / U | Pick / Reject / Clear flag |
 | ⌫, ⌘⌫ | Move to Trash |

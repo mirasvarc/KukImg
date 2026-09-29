@@ -25,6 +25,7 @@ private struct GeneralSettingsView: View {
     @AppStorage("restoreLastFolder") private var restoreLastFolder = true
     @AppStorage("showFilenames") private var showFilenames = false
     @AppStorage("hideEmptyFolders") private var hideEmptyFolders = false
+    @AppStorage("countSubfolderImages") private var countSubfolderImages = false
     @AppStorage("slideshowInterval") private var slideshowInterval = 4.0
     @AppStorage("slideshowLoop") private var slideshowLoop = false
     @AppStorage("slideshowShuffle") private var slideshowShuffle = false
@@ -48,10 +49,21 @@ private struct GeneralSettingsView: View {
                     set: { model.groupByFolder = $0 }
                 ))
                 .disabled(!model.includeSubfolders)
+                Toggle("Show folders in the grid", isOn: Binding(
+                    get: { model.showFoldersInGrid },
+                    set: { model.showFoldersInGrid = $0 }
+                ))
+                Text("Subfolders and a “..” tile for the enclosing folder appear before the images.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Sidebar") {
                 Toggle("Hide folders without images", isOn: $hideEmptyFolders)
                 Text("Folders whose subfolders contain images stay visible.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("Count images in subfolders too", isOn: $countSubfolderImages)
+                Text("The number next to a folder includes images in all of its subfolders.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

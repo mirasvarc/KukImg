@@ -42,6 +42,10 @@ struct ImageGridView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVGrid(columns: columns, spacing: spacing, pinnedViews: [.sectionHeaders]) {
+                    // Their own section, so the images start on a fresh row.
+                    if !model.gridFolders.isEmpty {
+                        Section { folderCells }
+                    }
                     if isGrouped {
                         ForEach(model.groups) { group in
                             Section {
@@ -51,7 +55,7 @@ struct ImageGridView: View {
                             }
                         }
                     } else {
-                        cells(for: model.visibleItems)
+                        Section { cells(for: model.visibleItems) }
                     }
                 }
                 .padding(padding)
@@ -77,28 +81,25 @@ struct ImageGridView: View {
                 guard !press.modifiers.hasMenuModifier else { return .ignored }
                 return vertical(1, extend: press.modifiers.contains(.shift))
             }
-            .onKeyPress(.home)       { model.selectFirst(); return .handled }
-            .onKeyPress(.end)        { model.selectLast();  return .handled }
+            .onKeyPress(.home)       { model.selectFirstInGrid(); return .handled }
+            .onKeyPress(.end)        { model.selectLastInGrid();  return .handled }
             .onKeyPress(.pageUp)     { page(-1) }
             .onKeyPress(.pageDown)   { page(1) }
-            .onKeyPress(.escape)     { escape() }
             .onKeyPress("p") { model.setFlag(.pick, for: model.selectedItems); return .handled }
             .onKeyPress("x") { model.setFlag(.reject, for: model.selectedItems); return .handled }
             .onKeyPress("u") { model.setFlag(nil, for: model.selectedItems); return .handled }
             .onKeyPress(.delete)        { model.deleteCurrent(); return .handled }
             .onKeyPress(.deleteForward) { model.deleteCurrent(); return .handled }
-            .onKeyPress(.return)     {
-                if model.currentItem != nil { model.isFullscreen = true }
-                return .handled
-            }
-            .onKeyPress(.space)      {
-                if model.currentItem != nil { model.isFullscreen = true }
-                return .handled
-            }
+            .onKeyPress(.return)     { model.openFocusedTile(); return .handled }
+            .onKeyPress(.space)      { model.openFocusedTile(); return .handled }
             .onChange(of: model.selection) { _, new in
                 guard let new else { return }
                 ensureVisible(new, proxy: proxy)
                 model.prefetchNeighbors(thumbSize: thumbSize, scale: scale)
+            }
+            .onChange(of: model.focusedFolder) { _, new in
+                guard let new else { return }
+                withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(new) }
             }
             .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, new in
                 visibleRect = new
@@ -124,10 +125,47 @@ struct ImageGridView: View {
         guard rows != prefetchedRows else { return }
         prefetchedRows = rows
         let cols = columnCount
-        let lo = min(items.count, rows.lowerBound * cols)
-        let hi = min(items.count, (rows.upperBound + 1) * cols)
+        // Folder tiles take the first rows; image rows start below them.
+        let folderCount = model.gridFolders.count
+        let folderRows = (folderCount + cols - 1) / cols
+        let lo = min(items.count, max(0, rows.lowerBound - folderRows) * cols)
+        let hi = min(items.count, max(0, rows.upperBound + 1 - folderRows) * cols)
         guard lo < hi else { return }
         scrollPrefetcher.prefetch(Array(items[lo..<hi]), pointSize: thumbSize, scale: scale)
+    }
+
+    private var folderCells: some View {
+        ForEach(model.gridFolders) { folder in
+            FolderTile(
+                folder: folder,
+                size: thumbSize,
+                focused: model.focusedFolder == folder.url,
+                showName: showFilenames
+            )
+            .id(folder.url)
+            // Same instant-click / double-click-opens pattern as the images.
+            // In Select mode a stray click on a folder mustn't drop the picks.
+            .onTapGesture {
+                guard !model.isSelectMode else { return }
+                model.focusFolder(folder.url)
+                focused = true
+            }
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                model.display(folder: folder.url)
+            })
+            .contextMenu {
+                Button {
+                    model.display(folder: folder.url)
+                } label: {
+                    Label("Open", systemImage: "folder")
+                }
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([folder.url])
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -255,19 +293,7 @@ struct ImageGridView: View {
     }
 
     private func horizontal(_ offset: Int, extend: Bool) -> KeyPress.Result {
-        if extend { model.extendSelection(by: offset) } else { model.move(by: offset) }
-        return .handled
-    }
-
-    /// First Escape collapses a multi-selection, the next one leaves Select mode.
-    private func escape() -> KeyPress.Result {
-        if model.hasMultipleSelected {
-            model.collapseSelection()
-        } else if model.isSelectMode {
-            model.isSelectMode = false
-        } else {
-            return .ignored
-        }
+        model.moveInGrid(by: offset, extend: extend)
         return .handled
     }
 
@@ -276,23 +302,23 @@ struct ImageGridView: View {
     private func page(_ direction: Int) -> KeyPress.Result {
         let rowHeight = cellHeight + spacing
         let rowsPerPage = max(1, Int(visibleRect.height / rowHeight) - 1)
-        model.move(by: direction * rowsPerPage * columnCount)
+        model.moveInGrid(by: direction * rowsPerPage * columnCount)
         return .handled
     }
 
     /// Moves one visual row, keeping the column — section headers mean rows
     /// can't be derived from a flat index once the grid is grouped.
     private func vertical(_ direction: Int, extend: Bool) -> KeyPress.Result {
-        model.moveVertically(by: direction, columns: columnCount, extend: extend)
+        model.moveVerticallyInGrid(by: direction, columns: columnCount, extend: extend)
         return .handled
     }
 
     /// Scrolls only when the selected cell is outside the viewport, and skips
     /// the animation while an arrow key is held down (rapid successive moves).
-    /// With sections the exact row offsets are unknown, so the proxy's own
-    /// minimal scrolling takes over.
+    /// With sections (or folder tiles above) the exact row offsets are unknown,
+    /// so the proxy's own minimal scrolling takes over.
     private func ensureVisible(_ id: ImageItem.ID, proxy: ScrollViewProxy) {
-        if !isGrouped {
+        if !isGrouped && model.gridFolders.isEmpty {
             guard let idx = model.index(of: id) else { return }
             let row = idx / columnCount
             let rowHeight = cellHeight + spacing
@@ -432,6 +458,83 @@ struct ThumbnailCell: View {
                 .font(.largeTitle)
                 .frame(width: 96, height: 96)
         }
+    }
+}
+
+/// A folder in the grid: the Finder icon of the folder (custom icons included)
+/// with its name. Laid out like `ThumbnailCell` so rows keep the same height.
+struct FolderTile: View {
+    let folder: GridFolder
+    let size: CGFloat
+    let focused: Bool
+    let showName: Bool
+
+    @State private var icon: NSImage?
+    @State private var hovering = false
+
+    var body: some View {
+        VStack(spacing: 2) {
+            tile
+            if showName {
+                Text(verbatim: folder.name)
+                    .font(.caption2)
+                    .foregroundStyle(focused ? .primary : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(width: size, height: 16)
+            }
+        }
+        .help(folder.url.path)
+        .task(id: folder.url) {
+            icon = NSWorkspace.shared.icon(forFile: folder.url.path)
+        }
+    }
+
+    private var tile: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.quaternary)
+            VStack(spacing: 4) {
+                ZStack(alignment: .bottomTrailing) {
+                    if let icon {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .scaledToFit()
+                    } else {
+                        Image(systemName: "folder.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .foregroundStyle(.tertiary)
+                    }
+                    if folder.isParent {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: max(14, size * 0.14)))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(Color.white, Color.accentColor)
+                            .shadow(radius: 1)
+                    }
+                }
+                .frame(width: size * 0.5, height: size * 0.5)
+                // Without the filename row the name goes into the tile itself.
+                if !showName {
+                    Text(verbatim: folder.name)
+                        .font(.caption)
+                        .foregroundStyle(focused ? .primary : .secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 6)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(focused ? Color.accentColor : .clear, lineWidth: 3)
+        )
+        .scaleEffect(hovering ? 1.03 : 1)
+        .brightness(hovering && !focused ? 0.05 : 0)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .onHover { hovering = $0 }
     }
 }
 

@@ -6,6 +6,7 @@ struct ContentView: View {
     @AppStorage("thumbSize") private var thumbSize: Double = 160
     @AppStorage("showFilenames") private var showFilenames = false
     @AppStorage("systemFullscreen") private var systemFullscreen = false
+    @AppStorage("hideEmptyFolders") private var hideEmptyFolders = false
 
     var body: some View {
         @Bindable var model = model
@@ -42,6 +43,14 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: model.isFullscreen)
+        // Escape works wherever the focus is: over the viewer, the grid, the
+        // detail view or the sidebar. The filter field keeps it for clearing
+        // its text, except while the viewer is up.
+        .background(EscapeKeyMonitor { isEditingText in
+            if isEditingText, !model.isFullscreen { return false }
+            return model.handleEscape()
+        })
+        .onChange(of: hideEmptyFolders) { model.reloadGridFolders() }
         .onChange(of: model.isFullscreen) { _, active in
             // Optionally mirror the immersive view into macOS full screen.
             guard systemFullscreen,
@@ -257,7 +266,7 @@ struct ContentView: View {
         Group {
             if model.isLoading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.visibleItems.isEmpty {
+            } else if model.visibleItems.isEmpty && model.gridFolders.isEmpty {
                 ContentUnavailableView(
                     "No Images",
                     systemImage: "photo",
@@ -346,6 +355,46 @@ private struct PhotosSidebarSection: View {
         }
         .task {
             if model.photos.isAuthorized { await model.photos.loadAlbums() }
+        }
+    }
+}
+
+/// Hands Escape key presses in its window to `action`, which returns whether it
+/// used the key. A local event monitor sees the key before any view does, so
+/// it works no matter which view has focus. Sheets keep Escape for Cancel.
+private struct EscapeKeyMonitor: NSViewRepresentable {
+    let action: (_ isEditingText: Bool) -> Bool
+
+    func makeNSView(context: Context) -> MonitorView {
+        let view = MonitorView()
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ view: MonitorView, context: Context) {
+        view.action = action
+    }
+
+    final class MonitorView: NSView {
+        var action: ((Bool) -> Bool)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let window = self.window,
+                      event.window === window,
+                      window.attachedSheet == nil,
+                      event.keyCode == 53,  // Escape
+                      event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+                      !event.isARepeat,
+                      let action = self.action
+                else { return event }
+                return action(window.firstResponder is NSText) ? nil : event
+            }
         }
     }
 }

@@ -11,7 +11,10 @@ struct FolderTreeRow: View {
     let isRoot: Bool
 
     @State private var info: FolderInfo?
+    /// Images in the whole subtree; only loaded when that count is shown.
+    @State private var total: ImageTotal?
     @AppStorage("hideEmptyFolders") private var hideEmptyFolders = false
+    @AppStorage("countSubfolderImages") private var countSubfolderImages = false
 
     nonisolated struct Subfolder: Hashable, Sendable {
         let url: URL
@@ -46,8 +49,12 @@ struct FolderTreeRow: View {
         // Keyed on items.count for the displayed folder, so deleting or adding
         // images refreshes this row's count right away — and on the hide flag,
         // which changes how much of the subtree has to be inspected.
-        .task(id: "\(url.path)|\(isCurrent ? model.items.count : -1)|\(hideEmptyFolders)") {
+        .task(id: "\(url.path)|\(isCurrent ? model.items.count : -1)|\(hideEmptyFolders)|\(countSubfolderImages)") {
             info = await Self.scan(url, deep: hideEmptyFolders)
+            // The displayed folder's total bypasses the cache so a delete shows at once.
+            total = countSubfolderImages
+                ? await FolderIndex.shared.imageTotal(url, fresh: isCurrent)
+                : nil
         }
         .onChange(of: isExpanded) { _, open in
             guard open else { return }
@@ -57,6 +64,17 @@ struct FolderTreeRow: View {
     }
 
     private var isCurrent: Bool { model.folder?.path == url.path }
+
+    /// Images directly in the folder, or in its whole subtree when the
+    /// "count images in subfolders" preference is on. Nil hides the badge.
+    private var countText: String? {
+        if countSubfolderImages {
+            guard let total, total.count > 0 else { return nil }
+            return total.isCapped ? "\(total.count)+" : "\(total.count)"
+        }
+        guard let count = info?.imageCount, count > 0 else { return nil }
+        return "\(count)"
+    }
 
     /// Expansion lives in the model so folder navigation can reveal a folder.
     private var isExpanded: Bool { model.expandedPaths.contains(url.path) }
@@ -79,8 +97,8 @@ struct FolderTreeRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
-                if let count = info?.imageCount, count > 0 {
-                    Text("\(count)")
+                if let countText {
+                    Text(verbatim: countText)
                         .font(.caption)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
@@ -148,6 +166,13 @@ struct FolderTreeRow: View {
     }
 }
 
+/// Number of images in a folder's whole subtree. `isCapped` means the walk
+/// stopped early on a huge tree and the real number is higher.
+nonisolated struct ImageTotal: Equatable, Sendable {
+    let count: Int
+    let isCapped: Bool
+}
+
 /// Remembers whether a folder's subtree holds any image at all. The walk is far
 /// too expensive to redo every time the sidebar redraws, and answers stay valid
 /// for a couple of minutes — the tree re-scans on expansion anyway.
@@ -164,6 +189,14 @@ actor FolderIndex {
     private var cache: [URL: Entry] = [:]
     private var inFlight: [URL: Task<Bool, Never>] = [:]
 
+    private struct TotalEntry: Sendable {
+        let value: ImageTotal
+        let checked: Date
+    }
+
+    private var totals: [URL: TotalEntry] = [:]
+    private var totalsInFlight: [URL: Task<ImageTotal, Never>] = [:]
+
     func containsImages(_ url: URL) async -> Bool {
         if let entry = cache[url], Date().timeIntervalSince(entry.checked) < Self.ttl {
             return entry.value
@@ -176,6 +209,46 @@ actor FolderIndex {
         inFlight[url] = nil
         cache[url] = Entry(value: result, checked: Date())
         return result
+    }
+
+    /// Counts the images in the subtree, cached like `containsImages`.
+    /// `fresh` skips the cache (the displayed folder after a change).
+    func imageTotal(_ url: URL, fresh: Bool = false) async -> ImageTotal {
+        if !fresh, let entry = totals[url], Date().timeIntervalSince(entry.checked) < Self.ttl {
+            return entry.value
+        }
+        if let running = totalsInFlight[url] { return await running.value }
+
+        let task = Task.detached(priority: .utility) { Self.countImages(in: url) }
+        totalsInFlight[url] = task
+        let result = await task.value
+        totalsInFlight[url] = nil
+        totals[url] = TotalEntry(value: result, checked: Date())
+        return result
+    }
+
+    /// Walks the whole subtree counting images. Gives up after a large number
+    /// of entries so a pathological tree can't keep the sidebar busy forever.
+    nonisolated static func countImages(in url: URL, limit: Int = 200_000) -> ImageTotal {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .contentTypeKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return ImageTotal(count: 0, isCapped: false) }
+
+        var count = 0
+        var examined = 0
+        for case let fileURL as URL in enumerator {
+            examined += 1
+            if examined > limit { return ImageTotal(count: count, isCapped: true) }
+            guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true,
+                  values.contentType?.conforms(to: .image) == true
+            else { continue }
+            count += 1
+        }
+        return ImageTotal(count: count, isCapped: false)
     }
 
     /// Walks the subtree and stops at the first image. Deliberately gives up
