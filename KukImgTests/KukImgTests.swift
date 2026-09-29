@@ -82,6 +82,67 @@ struct GridMathTests {
     }
 }
 
+@MainActor
+struct GridSelectionTests {
+    private func model(with names: [String]) -> AppModel {
+        let model = AppModel()
+        model.items = names.map { item($0) }
+        return model
+    }
+
+    @Test func escapeStepsBackOneLevelAtATime() {
+        let model = model(with: ["a.jpg", "b.jpg", "c.jpg"])
+        model.selection = model.visibleItems[0].id
+        model.selectAll()
+        model.isFullscreen = true
+
+        #expect(model.handleEscape())
+        #expect(!model.isFullscreen)
+        #expect(model.hasMultipleSelected)
+
+        #expect(model.handleEscape())
+        #expect(!model.hasMultipleSelected)
+        #expect(model.currentItem != nil)
+
+        #expect(model.handleEscape())
+        #expect(model.currentItem == nil)
+
+        // Nothing left to close: the key goes on to the system.
+        #expect(!model.handleEscape())
+    }
+
+    @Test func arrowsAfterEscapeStartAtTheFirstImage() {
+        let model = model(with: ["a.jpg", "b.jpg", "c.jpg"])
+        model.selection = nil
+        model.moveInGrid(by: 1)
+        #expect(model.currentIndex == 0)
+        model.moveInGrid(by: 1)
+        #expect(model.currentIndex == 1)
+        model.moveInGrid(by: 5)
+        #expect(model.currentIndex == 2)
+    }
+
+    @Test func shiftArrowsExtendTheSelection() {
+        let model = model(with: ["a.jpg", "b.jpg", "c.jpg"])
+        model.selection = model.visibleItems[0].id
+        model.moveInGrid(by: 2, extend: true)
+        #expect(model.selectedIDs.count == 3)
+    }
+
+    @Test func focusingAFolderClosesThePhoto() {
+        let model = model(with: ["a.jpg"])
+        model.selection = model.visibleItems[0].id
+        let folder = URL(fileURLWithPath: "/tmp/kuk/sub")
+        model.focusFolder(folder)
+        #expect(model.currentItem == nil)
+        #expect(model.focusedFolder == folder)
+
+        // Selecting a photo again drops the folder focus.
+        model.selection = model.visibleItems[0].id
+        #expect(model.focusedFolder == nil)
+    }
+}
+
 // MARK: - Renaming
 
 struct RenamePatternTests {
@@ -161,6 +222,150 @@ struct ExifDateTests {
 }
 
 // MARK: - Finder tags
+
+struct ImageTotalTests {
+    @Test func countsImagesInTheWholeSubtree() throws {
+        let tree = try TempTree()
+        try tree.file("a.jpg")
+        try tree.file("notes.txt")
+        try tree.file("sub/b.png")
+        try tree.file("sub/deeper/c.heic")
+        try tree.file(".hidden/d.jpg")
+        try tree.folder("empty")
+        #expect(FolderIndex.countImages(in: tree.root) == ImageTotal(count: 3, isCapped: false))
+        #expect(FolderIndex.countImages(in: tree.root.appendingPathComponent("sub")) == ImageTotal(count: 2, isCapped: false))
+    }
+
+    @Test func stopsEarlyOnHugeTrees() throws {
+        let tree = try TempTree()
+        for i in 0..<5 { try tree.file("\(i).jpg") }
+        let total = FolderIndex.countImages(in: tree.root, limit: 3)
+        #expect(total.isCapped)
+        #expect(total.count == 3)
+    }
+}
+
+struct ContentQueryTests {
+    private func record(_ labels: [String: Float], text: String = "") -> ContentRecord {
+        ContentRecord(modified: 0, size: 0, asset: nil, labels: labels, text: text)
+    }
+
+    @Test func matchesWholeLabelWordsAndPlurals() {
+        let dog = record(["animal": 0.9, "dog": 0.8, "blue_sky": 0.5])
+        #expect(ContentQuery("dog").matches(name: "IMG_1.jpg", record: dog))
+        #expect(ContentQuery("Dogs").matches(name: "IMG_1.jpg", record: dog))
+        #expect(ContentQuery("sky").matches(name: "IMG_1.jpg", record: dog))
+        #expect(!ContentQuery("do").matches(name: "IMG_1.jpg", record: dog))
+        #expect(ContentQuery("puppies").matches(name: "x.jpg", record: record(["puppy": 0.9])))
+    }
+
+    @Test func everyTermMustMatchSomewhere() {
+        let beachDog = record(["dog": 0.8, "beach": 0.6], text: "uctenka tesco")
+        #expect(ContentQuery("dog beach").matches(name: "a.jpg", record: beachDog))
+        #expect(!ContentQuery("dog cat").matches(name: "a.jpg", record: beachDog))
+        // Recognized text, diacritics folded, and the filename count too.
+        #expect(ContentQuery("Účtenka").matches(name: "a.jpg", record: beachDog))
+        #expect(ContentQuery("holiday dog").matches(name: "Holiday 2026.jpg", record: beachDog))
+    }
+
+    @Test func weakLabelsDontMatch() {
+        #expect(!ContentQuery("cat").matches(name: "a.jpg", record: record(["cat": 0.2])))
+        #expect(!ContentQuery("cat").matches(name: "a.jpg", record: nil))
+        #expect(!ContentQuery("  ").matches(name: "a.jpg", record: record(["cat": 0.9])))
+    }
+}
+
+struct ContentIndexTests {
+    private func record(_ labels: [String: Float], asset: String? = nil) -> ContentRecord {
+        ContentRecord(modified: 0, size: 0, asset: asset, labels: labels, text: "")
+    }
+
+    @Test func searchesOpenFoldersAndPhotos() async throws {
+        let tree = try TempTree()
+        let index = ContentIndex(storeURL: tree.root.appendingPathComponent("index.json"))
+        await index.insert(record(["dog": 0.9]), at: "/Pictures/a/dog.jpg")
+        await index.insert(record(["cat": 0.9]), at: "/Pictures/a/cat.jpg")
+        await index.insert(record(["dog": 0.9]), at: "/Other/dog2.jpg")
+        await index.insert(record(["dog": 0.9], asset: "ID1"), at: "/Cache/ID1-1/IMG_9.heic")
+
+        let roots = [URL(fileURLWithPath: "/Pictures")]
+        let files = await index.search(ContentQuery("dog"), roots: roots, includePhotos: false)
+        #expect(files.map(\.url.path) == ["/Pictures/a/dog.jpg"])
+
+        let withPhotos = await index.search(ContentQuery("dog"), roots: roots, includePhotos: true)
+        #expect(Set(withPhotos.map(\.url.path)) == ["/Pictures/a/dog.jpg", "/Cache/ID1-1/IMG_9.heic"])
+        #expect(withPhotos.first { $0.isAsset }?.assetIdentifier == "ID1")
+
+        let current = [item("dog.jpg", in: "/Pictures/a"), item("cat.jpg", in: "/Pictures/a")]
+        let matches = await index.matches(ContentQuery("dog"), among: current)
+        #expect(matches == [URL(fileURLWithPath: "/Pictures/a/dog.jpg")])
+    }
+
+    @Test func persistsRenamesAndPrunes() async throws {
+        let tree = try TempTree()
+        let store = tree.root.appendingPathComponent("index.json")
+        let index = ContentIndex(storeURL: store)
+        await index.insert(record(["dog": 0.9]), at: "/P/old.jpg")
+        await index.insert(record(["cat": 0.9]), at: "/P/gone.jpg")
+        await index.move([("/P/old.jpg", "/P/new.jpg")])
+        await index.prune(under: URL(fileURLWithPath: "/P"), keeping: [item("new.jpg", in: "/P")])
+        await index.save()
+
+        let reloaded = ContentIndex(storeURL: store)
+        let all = await reloaded.search(
+            ContentQuery("jpg"), roots: [URL(fileURLWithPath: "/P")], includePhotos: false
+        )
+        #expect(all.map(\.url.path) == ["/P/new.jpg"])
+    }
+
+    /// A white PNG with one line of large black text.
+    private func textImage(_ text: String, named name: String, in tree: TempTree) throws -> URL {
+        let image = NSImage(size: NSSize(width: 1600, height: 600))
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: 1600, height: 600).fill()
+        (text as NSString).draw(
+            at: NSPoint(x: 80, y: 250), withAttributes: [.font: NSFont.systemFont(ofSize: 80)]
+        )
+        image.unlockFocus()
+        let url = tree.root.appendingPathComponent(name)
+        let tiff = try #require(image.tiffRepresentation)
+        let png = try #require(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
+        try png.write(to: url)
+        return url
+    }
+
+    @Test func indexesQueuedImages() async throws {
+        let tree = try TempTree()
+        let words = ["Mango", "Kiwi", "Banana", "Cherry", "Lemon", "Papaya"]
+        var items: [ImageItem] = []
+        for (i, word) in words.enumerated() {
+            let url = try textImage(word, named: "\(i).png", in: tree)
+            items.append(ImageItem(url: url, modifiedAt: Date(timeIntervalSince1970: 1), fileSize: 1))
+        }
+        let index = ContentIndex(storeURL: tree.root.appendingPathComponent("index.json"))
+        await index.enqueue(items)
+        for _ in 0..<600 where !(await index.isIdle) {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(await index.isIdle)
+        let found = await index.search(ContentQuery("papaya"), roots: [tree.root], includePhotos: false)
+        #expect(found.map(\.name) == ["5.png"])
+
+        // Up-to-date images aren't queued again.
+        await index.enqueue(items)
+        #expect(await index.isIdle)
+    }
+
+    @Test func readsTextInImages() async throws {
+        let tree = try TempTree()
+        let url = try textImage("ÚČTENKA Tesco Praha", named: "receipt.png", in: tree)
+
+        let record = try #require(await ContentAnalyzer.analyze(ImageItem(url: url, modifiedAt: .now, fileSize: 1)))
+        #expect(record.text.contains("uctenka"))
+        #expect(ContentQuery("tesco").matches(name: "receipt.png", record: record))
+    }
+}
 
 struct FinderTagsTests {
     @Test func readsFlagsFromTagNames() {

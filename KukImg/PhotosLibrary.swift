@@ -80,6 +80,15 @@ final class PhotosLibraryModel {
         return result.items
     }
 
+    /// Every image in the library, for the content index. Unlike
+    /// `items(in:)` it doesn't touch the album truncation shown in the sidebar.
+    func allImageItems() async -> [ImageItem] {
+        guard isAuthorized else { return [] }
+        return await Task.detached(priority: .utility) {
+            Self.fetchItems(kind: .allPhotos, limit: .max).items
+        }.value
+    }
+
     // MARK: - Fetching
 
     nonisolated private static func fetchAlbums() -> [PhotoAlbum] {
@@ -268,10 +277,14 @@ nonisolated enum PhotosImages {
         case display
     }
 
-    static func image(for id: String, pixelSize: CGFloat, quality: Quality) async -> NSImage? {
+    /// `allowsNetwork: false` returns nil for assets with no local rendition
+    /// instead of downloading them from iCloud.
+    static func image(
+        for id: String, pixelSize: CGFloat, quality: Quality, allowsNetwork: Bool = true
+    ) async -> NSImage? {
         guard let asset = PhotosAssetRegistry.shared.asset(for: id) else { return nil }
         let options = PHImageRequestOptions()
-        options.isNetworkAccessAllowed = true
+        options.isNetworkAccessAllowed = allowsNetwork
         options.deliveryMode = .highQualityFormat
         options.resizeMode = quality == .thumbnail ? .fast : .exact
         options.isSynchronous = false

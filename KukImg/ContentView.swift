@@ -20,12 +20,18 @@ struct ContentView: View {
             }
             .navigationTitle(model.sourceTitle ?? "Kuk")
             .toolbar { toolbar }
-            .searchable(text: $model.filterText, placement: .toolbar, prompt: "Filter by name")
+            .searchable(text: $model.filterText, placement: .toolbar, prompt: searchPrompt)
+            .modifier(SearchScopePicker(
+                isEnabled: model.contentSearch.isEnabled,
+                inAlbum: model.photoAlbum != nil,
+                scope: $model.searchScope
+            ))
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 StatusBar(
                     item: model.currentItem,
                     selectedCount: model.selectedIDs.count,
-                    activity: model.activity
+                    activity: model.activity,
+                    indexing: indexingActivity
                 )
             }
             .dropDestination(for: URL.self) { urls, _ in
@@ -146,6 +152,19 @@ struct ContentView: View {
         }
     }
 
+    private var searchPrompt: LocalizedStringKey {
+        model.contentSearch.isEnabled ? "Search names and contents" : "Filter by name"
+    }
+
+    private var indexingActivity: Activity? {
+        guard let progress = model.contentSearch.progress else { return nil }
+        return Activity(
+            title: String(localized: "Indexing"),
+            completed: progress.done,
+            total: progress.total
+        )
+    }
+
     private var shareHelp: String {
         let count = model.selectedIDs.count
         return count > 1 ? String(localized: "Share \(count) images") : String(localized: "Share")
@@ -196,7 +215,7 @@ struct ContentView: View {
                     }
                 }
             }
-            if model.folder != nil || model.photoAlbum != nil {
+            if model.folder != nil || model.photoAlbum != nil || model.searchResults != nil {
                 Section {
                     Text(countLabel)
                         .font(.caption)
@@ -249,7 +268,9 @@ struct ContentView: View {
     private var countLabel: String {
         let shown = model.visibleItems.count
         let total = model.items.count
-        var text = shown == total
+        var text = model.searchResults != nil
+            ? String(localized: "\(shown) results")
+            : shown == total
             ? String(localized: "\(total) images")
             : String(localized: "\(shown) of \(total) images")
         if let albumTotal = model.photos.truncatedFrom, model.photoAlbum != nil {
@@ -283,6 +304,8 @@ struct ContentView: View {
         let filter = model.filterText
         return if model.folder == nil && model.photoAlbum == nil {
             String(localized: "Choose a folder via ⌘O or drop one here.")
+        } else if !filter.isEmpty, model.contentSearch.isEnabled {
+            String(localized: "Nothing found for “\(filter)”. Content search understands English words, like dog, beach or car.")
         } else if !filter.isEmpty {
             String(localized: "No images match “\(filter)”.")
         } else if model.flagFilter != .all {
@@ -355,6 +378,27 @@ private struct PhotosSidebarSection: View {
         }
         .task {
             if model.photos.isAuthorized { await model.photos.loadAlbums() }
+        }
+    }
+}
+
+/// The "This Folder / Everywhere" scope bar under the search field, shown only
+/// while content search is on (there is nothing to search everywhere without
+/// the index).
+private struct SearchScopePicker: ViewModifier {
+    let isEnabled: Bool
+    let inAlbum: Bool
+    @Binding var scope: SearchScope
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.searchScopes($scope) {
+                ForEach(SearchScope.allCases, id: \.self) { scope in
+                    Text(scope.label(inAlbum: inAlbum)).tag(scope)
+                }
+            }
+        } else {
+            content
         }
     }
 }

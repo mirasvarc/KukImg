@@ -149,11 +149,17 @@ final class AppModel {
     var isLoading = false
     var isFullscreen = false
     var showInfoPanel = false
-    var filterText: String = "" { didSet { updateVisibleItems() } }
+    var filterText: String = "" { didSet { filterChanged() } }
+    /// Where content search looks; only offered while it is enabled.
+    var searchScope: SearchScope = .current { didSet { filterChanged() } }
+    /// Results of an "Everywhere" search; while set, the grid shows these
+    /// instead of the displayed folder's items.
+    private(set) var searchResults: [ImageItem]?
     var sortOrder: SortOrder {
         didSet {
             UserDefaults.standard.set(sortOrder.rawValue, forKey: "sortOrder")
             applySort()
+            if searchResults != nil { scheduleSearch() }
         }
     }
     var includeSubfolders: Bool {
@@ -184,6 +190,7 @@ final class AppModel {
     private(set) var folderTiles: [GridFolder] = []
     var recents: [RecentFolder] = []
     let photos = PhotosLibraryModel()
+    let contentSearch = ContentSearchModel()
     /// Non-nil while the conversion sheet should be up.
     var convertRequest: ConvertRequest?
     /// Non-nil while the rename sheet should be up.
@@ -206,6 +213,9 @@ final class AppModel {
     @ObservationIgnored private var indexByID: [ImageItem.ID: Int] = [:]
     /// Flat index where each rendered section starts (just [0] ungrouped).
     @ObservationIgnored private var groupStarts: [Int] = [0]
+    /// Displayed items whose content matches the search ("This Folder").
+    @ObservationIgnored private var contentMatches: Set<URL>?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
 
     private var zoomRequestCount = 0
     /// Roots we hold a security scope for; released on close/deinit.
@@ -241,7 +251,16 @@ final class AppModel {
         self.groupByFolder = UserDefaults.standard.object(forKey: "groupByFolder") as? Bool ?? true
         self.showFoldersInGrid = UserDefaults.standard.bool(forKey: "showFoldersInGrid")
         self.recents = RecentFolders.all()
-        photos.onLibraryChange = { [weak self] in self?.refreshPhotoAlbum() }
+        photos.onLibraryChange = { [weak self] in
+            self?.refreshPhotoAlbum()
+            self?.indexPhotosLibrary()
+        }
+        contentSearch.onEnabledChange = { [weak self] enabled in self?.contentSearchToggled(enabled) }
+        contentSearch.onIndexUpdate = { [weak self] in
+            guard let self, !ContentQuery(self.filterText).isEmpty else { return }
+            self.scheduleSearch()
+        }
+        if contentSearch.isEnabled { startIndexing() }
     }
 
     isolated deinit {
@@ -275,16 +294,24 @@ final class AppModel {
     // MARK: - Filtering & grouping
 
     private func updateVisibleItems() {
-        var filtered = filterText.isEmpty
-            ? items
-            : items.filter { $0.name.localizedCaseInsensitiveContains(filterText) }
+        var filtered: [ImageItem]
+        if let searchResults {
+            filtered = searchResults
+        } else if filterText.isEmpty {
+            filtered = items
+        } else {
+            let matches = contentMatches ?? []
+            filtered = items.filter {
+                $0.name.localizedCaseInsensitiveContains(filterText) || matches.contains($0.id)
+            }
+        }
         switch flagFilter {
         case .all:      break
         case .picked:   filtered = filtered.filter { flags[$0.url] == .pick }
         case .rejected: filtered = filtered.filter { flags[$0.url] == .reject }
         }
 
-        if includeSubfolders, groupByFolder, photoAlbum == nil {
+        if includeSubfolders, groupByFolder, photoAlbum == nil, searchResults == nil {
             let built = Self.group(filtered, relativeTo: folder)
             groups = built.count > 1 ? built : []
         } else {
@@ -431,11 +458,141 @@ final class AppModel {
     func selectFirst() { selection = visibleItems.first?.id }
     func selectLast()  { selection = visibleItems.last?.id }
 
+    // MARK: - Content search
+
+    /// The search text or scope changed. Without content search (or with an
+    /// empty query) the name filter applies at once; content matches arrive
+    /// asynchronously and replace the list when ready.
+    private func filterChanged() {
+        if contentSearch.isEnabled, !ContentQuery(filterText).isEmpty {
+            scheduleSearch()
+        } else {
+            searchTask?.cancel()
+            contentMatches = nil
+            searchResults = nil
+            updateVisibleItems()
+        }
+    }
+
+    /// Runs the query against the index, debounced for typing.
+    func scheduleSearch() {
+        searchTask?.cancel()
+        let query = ContentQuery(filterText)
+        guard contentSearch.isEnabled, !query.isEmpty else { return }
+        let index = contentSearch.index
+        if searchScope == .everywhere {
+            let roots = openFolders
+            let includePhotos = photos.isAuthorized
+            let order = sortOrder
+            searchTask = Task {
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { return }
+                let found = await index.search(query, roots: roots, includePhotos: includePhotos)
+                let checked = await SearchResultCheck.run(found, order: order)
+                guard !Task.isCancelled else { return }
+                if !checked.outdated.isEmpty { await index.enqueue(checked.outdated) }
+                var updated = self.flags
+                for (url, flag) in checked.flags { updated[url] = flag }
+                if updated != self.flags { self.flags = updated }
+                self.contentMatches = nil
+                self.searchResults = checked.items
+                self.updateVisibleItems()
+            }
+        } else {
+            let snapshot = items
+            searchTask = Task {
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { return }
+                let matches = await index.matches(query, among: snapshot)
+                guard !Task.isCancelled else { return }
+                self.searchResults = nil
+                self.contentMatches = matches
+                self.updateVisibleItems()
+            }
+        }
+    }
+
+    /// Opening a folder or album leaves an "Everywhere" search, like Finder.
+    private func endEverywhereSearch() {
+        guard searchResults != nil else { return }
+        filterText = ""
+    }
+
+    /// Shows a search result in its own folder, selected.
+    func showInEnclosingFolder(_ item: ImageItem) {
+        guard !item.isAsset else { return }
+        let parent = item.url.deletingLastPathComponent()
+        endEverywhereSearch()
+        pendingSelection = item.url
+        display(folder: parent)
+    }
+
+    private func contentSearchToggled(_ enabled: Bool) {
+        if enabled {
+            startIndexing()
+        } else {
+            let index = contentSearch.index
+            Task { await index.stop() }
+            searchScope = .current
+        }
+        filterChanged()
+    }
+
+    /// Queues everything the index should cover: the displayed images first,
+    /// then all open folders and the Photos library.
+    private func startIndexing() {
+        guard contentSearch.isEnabled else { return }
+        let index = contentSearch.index
+        let current = items
+        Task { await index.enqueue(current, first: true) }
+        for root in openFolders { indexFolder(root) }
+        indexPhotosLibrary()
+    }
+
+    private func indexFolder(_ root: URL) {
+        guard contentSearch.isEnabled else { return }
+        let index = contentSearch.index
+        Task.detached(priority: .utility) {
+            guard let scanned = ImageScanner.scan(root, recursive: true) else { return }
+            await index.prune(under: root, keeping: scanned.items)
+            await index.enqueue(scanned.items)
+        }
+    }
+
+    private func indexPhotosLibrary() {
+        guard contentSearch.isEnabled, photos.isAuthorized else { return }
+        let index = contentSearch.index
+        Task {
+            let all = await photos.allImageItems()
+            await index.prunePhotos(keeping: all)
+            await index.enqueue(all)
+        }
+    }
+
+    /// A folder or album was (re)loaded: its new or changed images jump the
+    /// indexing queue, and an active search sees the new list.
+    private func contentItemsChanged(_ loaded: [ImageItem]) {
+        guard contentSearch.isEnabled else { return }
+        let index = contentSearch.index
+        Task { await index.enqueue(loaded, first: true) }
+        if !ContentQuery(filterText).isEmpty { scheduleSearch() }
+    }
+
+    /// Renamed files keep what was recognized in them.
+    private func moveContentRecords(_ moves: [(original: URL, destination: URL)]) {
+        guard contentSearch.isEnabled, !moves.isEmpty else { return }
+        let pairs = moves.map { ($0.original.path, $0.destination.path) }
+        let index = contentSearch.index
+        Task { await index.move(pairs) }
+    }
+
     // MARK: - Grid navigation
 
     /// Folder tiles as the grid shows them: the name filter applies to
     /// subfolders, the ".." tile always stays.
     var gridFolders: [GridFolder] {
+        // Results from everywhere don't belong to the displayed folder.
+        guard searchResults == nil else { return [] }
         guard !filterText.isEmpty else { return folderTiles }
         return folderTiles.filter { $0.isParent || $0.name.localizedCaseInsensitiveContains(filterText) }
     }
@@ -655,6 +812,7 @@ final class AppModel {
                 securityScopedRoots.append(url)
             }
             openFolders.append(url)
+            indexFolder(url)
         }
         // Re-created on every open, which also refreshes a stale bookmark.
         recents = RecentFolders.add(url)
@@ -664,6 +822,7 @@ final class AppModel {
     /// Shows the contents of a folder — a root or any subfolder from the tree.
     /// Sandbox access to subfolders flows from their root's active scope.
     func display(folder url: URL) {
+        endEverywhereSearch()
         rememberCurrentSelection()
         // Set before emptying the list so fullscreen survives the switch.
         self.isLoading = true
@@ -693,6 +852,8 @@ final class AppModel {
     /// Removes a root from the sidebar and releases its security scope.
     func closeRoot(_ url: URL) {
         openFolders.removeAll { $0.path == url.path }
+        let index = contentSearch.index
+        Task { await index.dequeue(under: url) }
         if let idx = securityScopedRoots.firstIndex(where: { $0.path == url.path }) {
             securityScopedRoots[idx].stopAccessingSecurityScopedResource()
             securityScopedRoots.remove(at: idx)
@@ -781,6 +942,7 @@ final class AppModel {
     /// trashing and renaming stay disabled, everything else materializes a
     /// cached copy on demand.
     func displayPhotos(_ album: PhotoAlbum) {
+        endEverywhereSearch()
         rememberCurrentSelection()
         isLoading = true
         folderWatcher = nil
@@ -835,6 +997,7 @@ final class AppModel {
                 self.selection = self.visibleItems.first?.id
             }
             if order != self.sortOrder { self.applySort() }
+            self.contentItemsChanged(sorted)
         }
     }
 
@@ -901,6 +1064,7 @@ final class AppModel {
         pendingSelection = nil
         // The order was changed while this scan ran; its sort is stale.
         if order != sortOrder { applySort() }
+        contentItemsChanged(result)
     }
 
     // MARK: - Folder watching
@@ -984,6 +1148,7 @@ final class AppModel {
             : String(localized: "Move \(deletable.count) Images to Trash")
         performTrash(deletable.map(\.url), actionName: actionName)
 
+        searchResults?.removeAll { ids.contains($0.id) }
         items.removeAll { ids.contains($0.id) }
         withoutSyncing { selectedIDs = [] }
         if let firstIdx, !visibleItems.isEmpty {
@@ -1048,6 +1213,7 @@ final class AppModel {
     private func retrash(_ urls: [URL], actionName: String) {
         performTrash(urls, actionName: actionName)
         let paths = Set(urls.map(\.path))
+        searchResults?.removeAll { paths.contains($0.url.path) }
         items.removeAll { paths.contains($0.url.path) }
         withoutSyncing { selectedIDs = [] }
     }
@@ -1293,6 +1459,7 @@ final class AppModel {
         }
         flags[destination] = flags[item.url]
         flags[item.url] = nil
+        moveContentRecords([(item.url, destination)])
         pendingSelection = destination
         rescan()
         return nil
@@ -1342,6 +1509,7 @@ final class AppModel {
         for entry in renamed { updated[entry.original] = nil }
         for entry in renamed { updated[entry.destination] = before[entry.original] }
         flags = updated
+        moveContentRecords(renamed)
         pendingSelection = renamed.first?.destination
         rescan()
         return failures

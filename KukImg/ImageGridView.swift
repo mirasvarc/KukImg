@@ -257,6 +257,11 @@ struct ImageGridView: View {
         }
         .disabled(targets.allSatisfy(\.isAsset))
         Divider()
+        if model.searchResults != nil, !item.isAsset {
+            Button { model.showInEnclosingFolder(item) } label: {
+                Label("Show in Enclosing Folder", systemImage: "arrow.turn.left.up")
+            }
+        }
         Button { model.reveal(targets) } label: {
             Label("Show in Finder", systemImage: "folder")
         }

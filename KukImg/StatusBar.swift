@@ -5,6 +5,8 @@ struct StatusBar: View {
     var selectedCount: Int = 0
     /// A background copy/move in progress.
     var activity: Activity?
+    /// Content indexing in progress.
+    var indexing: Activity?
     @State private var meta: ImageMetadata?
 
     var body: some View {
@@ -18,7 +20,7 @@ struct StatusBar: View {
             } else {
                 Text(" ")
             }
-            if let activity {
+            ForEach([activity, indexing].compactMap(\.self), id: \.title) { activity in
                 HStack(spacing: 6) {
                     ProgressView(value: Double(activity.completed), total: Double(max(activity.total, 1)))
                         .progressViewStyle(.linear)

@@ -33,6 +33,14 @@ private struct GeneralSettingsView: View {
 
     private static let intervals: [Double] = [2, 4, 8, 15]
 
+    private var indexStatus: String {
+        let search = model.contentSearch
+        if let progress = search.progress {
+            return String(localized: "Indexing \(progress.done) of \(progress.total)…")
+        }
+        return String(localized: "\(search.indexedCount) images indexed")
+    }
+
     var body: some View {
         Form {
             Section("Startup") {
@@ -56,6 +64,25 @@ private struct GeneralSettingsView: View {
                 Text("Subfolders and a “..” tile for the enclosing folder appear before the images.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            Section("Search") {
+                Toggle("Search by image content", isOn: Binding(
+                    get: { model.contentSearch.isEnabled },
+                    set: { model.contentSearch.isEnabled = $0 }
+                ))
+                Text("Kuk recognizes objects, scenes and text in the images of your open folders and the Photos library, so the search field finds them by English words like dog, beach or car. Everything runs on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    if model.contentSearch.isEnabled {
+                        Text(indexStatus)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Spacer()
+                    Button("Clear Index") { model.contentSearch.clearIndex() }
+                        .disabled(!model.contentSearch.hasIndex)
+                }
             }
             Section("Sidebar") {
                 Toggle("Hide folders without images", isOn: $hideEmptyFolders)

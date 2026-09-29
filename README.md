@@ -33,12 +33,13 @@ Designed for flipping through large folders of photos with zero friction — thu
 - **Rotate** (⌘L/⌘R) — lossless rotation via the EXIF orientation tag
 - **Metadata panel** — dimensions, camera, lens, ISO, shutter, aperture, focal length, GPS from EXIF with an Open in Maps link
 - **Filter & sort** — live filename filter, eight sort orders (including Date Taken from EXIF), optional recursive folder scan with per-folder grouped sections, optional filename labels under thumbnails
+- **Content search** (opt-in in Settings) — finds images by what's in them, using English words ("dog", "beach", "dog beach") or text visible in the photo (receipts, signs, screenshots); searches the current folder or everywhere (all open folders and the Photos library). Images are analyzed on this Mac with Apple's Vision framework and the index is kept on disk, so only new or changed images are processed again
 - **Live folder watching** — files added or removed in Finder show up automatically
 - **Finder integration** — drag & drop a folder (or a single image) in, drag images out, reveal in Finder, copy (file + bitmap), Open With menu, move to Trash with Undo
 - **Open With** — registers as a viewer for images and folders, so it appears in Finder's Open With menu and can be set as the default image viewer (Get Info → Open with → Change All…)
 - **Folder tree** — sidebar shows each open folder as a lazily loaded tree of its subfolders with per-folder image counts (optionally including all subfolders); multiple folders can be open at once (Add Folder… button, multi-select in the open panel) and closed individually
 - **Folder navigation** — jump to the next or previous folder that contains images (⌥⌘↓ / ⌥⌘↑) and to the enclosing folder (⌘↑) straight from the keyboard, also in fullscreen; the sidebar follows along; optionally, subfolders and a “..” tile show up as tiles at the top of the grid and open with a double-click or Return
-- **Settings** (⌘,) — startup, thumbnail and slideshow options, plus app info and update check
+- **Settings** (⌘,) — startup, browsing (filenames, subfolders, folders in the grid), sidebar (hide empty folders, count images in subfolders too), content search, viewer and slideshow options, plus app info and update check
 - **Recent folders** — sidebar and File → Open Recent, restored across launches via security-scoped bookmarks (the app is sandboxed); individual entries removable from the sidebar
 - **Localized** — English and Czech
 - **Automatic updates** — new versions are offered and installed in-app via [Sparkle](https://sparkle-project.org)
@@ -98,16 +99,17 @@ cd KukImg
 open KukImg.xcodeproj
 ```
 
-Build and run the `KukImg` scheme (⌘R). The only dependency is [Sparkle](https://sparkle-project.org) (automatic updates), resolved automatically via Swift Package Manager; everything else uses system frameworks (SwiftUI, AppKit, QuickLookThumbnailing, ImageIO, PhotoKit).
+Build and run the `KukImg` scheme (⌘R). The only dependency is [Sparkle](https://sparkle-project.org) (automatic updates), resolved automatically via Swift Package Manager; everything else uses system frameworks (SwiftUI, AppKit, QuickLookThumbnailing, ImageIO, PhotoKit, Vision).
 
 ## Architecture notes
 
-- `AppModel` — single `@Observable` model: folder scanning, selection & multi-selection, filtering, sorting, grouping, culling flags, folder watching, prefetch orchestration, trash with undo
+- `AppModel` — single `@Observable` model: folder scanning, selection & multi-selection, filtering and search, sorting, grouping, folder tiles, culling flags, folder watching, prefetch orchestration, trash with undo
 - `PhotosLibraryModel` / `PhotosMaterializer` — Photos albums as lightweight items; originals are exported to an LRU-trimmed cache only when something needs a real file
 - `ImageLoading` — one façade over both origins (files and Photos assets) for thumbnails, previews, full decodes and metadata
 - `ThumbnailCache` — one actor for thumbnails of files (QuickLook, ImageIO fallback) and Photos assets (PhotoKit); requests are quantized into size buckets, concurrent requests for the same thumbnail share one generation, and a generation is cancelled once nobody waits for it
 - `FullImageCache` / `DecodeTier` — decodes sized to the viewport in 512 px steps (a bigger cached decode serves a smaller request), RAW embedded previews, shared in-flight decodes
 - `FolderNavigator` — depth-first walk of the open folder trees for next/previous folder
+- `ContentIndex` / `ContentAnalyzer` — content search: an actor queues images for Vision (classification, plus text recognition when a quick detector finds text), keeps the results in a JSON index in Application Support and answers queries; the displayed folder is indexed first, unchanged images are never analyzed twice
 - `FinderTags` / `AssetFlagStore` — culling flags persisted as coloured Finder tags, or in the app's defaults for Photos items
 - `MetadataCache` — deduplicated EXIF reads shared by the status bar and info panel
 - `PhotoCanvas` — shared image surface of the detail and fullscreen views: progressive loading, zoom & pan (NSScrollView-backed), neighbor prefetching
