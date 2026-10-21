@@ -24,11 +24,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct KukImgApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var model = AppModel()
+    @State private var model: AppModel
     @AppStorage("showFilenames") private var showFilenames = false
-    private let updaterController = SPUStandardUpdaterController(
-        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
-    )
+    private let updaterController: SPUStandardUpdaterController
+
+    init() {
+        // Before anything reads the preferences.
+        if !AppEnvironment.isRunningTests { SandboxMigration.run() }
+        _model = State(initialValue: AppModel())
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: !AppEnvironment.isRunningTests, updaterDelegate: nil, userDriverDelegate: nil
+        )
+    }
 
     var body: some Scene {
         // A single Window (not WindowGroup): the whole app shares one AppModel,
@@ -38,6 +45,7 @@ struct KukImgApp: App {
                 .environment(model)
                 .frame(minWidth: 800, minHeight: 600)
                 .task {
+                    guard !AppEnvironment.isRunningTests else { return }
                     appDelegate.model = model
                     model.restoreLastFolder()
                     // Exported Photos copies pile up over time; prune them once

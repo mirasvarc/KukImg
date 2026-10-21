@@ -218,8 +218,6 @@ final class AppModel {
     @ObservationIgnored private var searchTask: Task<Void, Never>?
 
     private var zoomRequestCount = 0
-    /// Roots we hold a security scope for; released on close/deinit.
-    private var securityScopedRoots: [URL] = []
     private let prefetcher = Prefetcher()
     private var scanGeneration = 0
     private var scanTask: Task<Void, Never>?
@@ -260,11 +258,7 @@ final class AppModel {
             guard let self, !ContentQuery(self.filterText).isEmpty else { return }
             self.scheduleSearch()
         }
-        if contentSearch.isEnabled { startIndexing() }
-    }
-
-    isolated deinit {
-        for url in securityScopedRoots { url.stopAccessingSecurityScopedResource() }
+        if contentSearch.isEnabled, !AppEnvironment.isRunningTests { startIndexing() }
     }
 
     var currentItem: ImageItem? {
@@ -736,7 +730,7 @@ final class AppModel {
         panel.prompt = String(localized: "Open")
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {
-            openRoot(url, isSecurityScoped: false)
+            openRoot(url)
         }
     }
 
@@ -747,12 +741,12 @@ final class AppModel {
               openFolders.isEmpty,
               let recent = recents.first,
               let url = RecentFolders.resolve(recent) else { return }
-        openRoot(url, isSecurityScoped: true)
+        openRoot(url)
     }
 
     func openRecent(_ recent: RecentFolder) {
-        guard let url = RecentFolders.resolve(recent) else { return }
-        openRoot(url, isSecurityScoped: true)
+        guard let url = RecentFolders.resolve(recent) else { NSSound.beep(); return }
+        openRoot(url)
     }
 
     func removeRecent(_ recent: RecentFolder) {
@@ -767,29 +761,24 @@ final class AppModel {
     func handleDrop(_ url: URL) {
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentTypeKey])
         if values?.isDirectory == true {
-            openRoot(url, isSecurityScoped: false)
+            openRoot(url)
         } else if values?.contentType?.conforms(to: .image) == true {
-            pendingSelection = url
+            pendingSelection = url.canonicalPath
             let parent = url.deletingLastPathComponent()
-            // Reuse a stored bookmark when the parent folder is in Recents —
-            // that grants sandbox access to the whole folder, not just the file.
-            if let recent = recents.first(where: { $0.path == parent.path }),
-               let scoped = RecentFolders.resolve(recent) {
-                openRoot(scoped, isSecurityScoped: true)
-            } else if (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) != nil {
-                openRoot(parent, isSecurityScoped: false)
+            if (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) != nil {
+                openRoot(parent)
             } else if let granted = requestFolderAccess(for: parent) {
-                openRoot(granted, isSecurityScoped: false)
+                openRoot(granted)
             } else {
                 // Declined — applyScanResult falls back to showing just this file.
-                openRoot(parent, isSecurityScoped: false)
+                openRoot(parent)
             }
         }
     }
 
-    /// The sandbox only grants access to the opened file itself, so browsing
-    /// its siblings needs the user to grant folder access once (a bookmark is
-    /// stored afterwards). Returns nil when the user declines.
+    /// The folder can't be listed (macOS privacy protection was declined, or
+    /// plain permissions), so browsing the image's siblings needs the user to
+    /// pick the folder once. Returns nil when the user declines.
     private func requestFolderAccess(for parent: URL) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -804,13 +793,11 @@ final class AppModel {
     }
 
     /// Opens a folder as a sidebar root (keeping any already open roots) and
-    /// shows its contents. Security scopes are held per root until closed.
-    func openRoot(_ url: URL, isSecurityScoped: Bool) {
+    /// shows its contents. The root is kept by its real path: subfolders come
+    /// from directory listings, which resolve symlinks, and must stay inside it.
+    func openRoot(_ url: URL) {
+        let url = url.canonicalPath
         if !openFolders.contains(where: { $0.path == url.path }) {
-            if isSecurityScoped {
-                guard url.startAccessingSecurityScopedResource() else { return }
-                securityScopedRoots.append(url)
-            }
             openFolders.append(url)
             indexFolder(url)
         }
@@ -820,7 +807,6 @@ final class AppModel {
     }
 
     /// Shows the contents of a folder — a root or any subfolder from the tree.
-    /// Sandbox access to subfolders flows from their root's active scope.
     func display(folder url: URL) {
         endEverywhereSearch()
         rememberCurrentSelection()
@@ -849,15 +835,11 @@ final class AppModel {
         }
     }
 
-    /// Removes a root from the sidebar and releases its security scope.
+    /// Removes a root from the sidebar.
     func closeRoot(_ url: URL) {
         openFolders.removeAll { $0.path == url.path }
         let index = contentSearch.index
         Task { await index.dequeue(under: url) }
-        if let idx = securityScopedRoots.firstIndex(where: { $0.path == url.path }) {
-            securityScopedRoots[idx].stopAccessingSecurityScopedResource()
-            securityScopedRoots.remove(at: idx)
-        }
         // If the displayed folder lived under the closed root, switch away.
         guard let current = folder,
               current.path == url.path || current.path.hasPrefix(url.path + "/")
@@ -1031,7 +1013,7 @@ final class AppModel {
 
     private func applyScanResult(_ sorted: [ImageItem], flags scannedFlags: [URL: ImageFlag], order: SortOrder) {
         var result = sorted
-        // A dropped image grants sandbox access to the file, not its folder —
+        // The folder may be unreadable while the opened file itself is not —
         // if the folder scan came back empty, still show the dropped file.
         if let pending = pendingSelection, result.isEmpty {
             let values = try? pending.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .tagNamesKey])

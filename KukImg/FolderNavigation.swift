@@ -10,8 +10,9 @@ nonisolated enum FolderNavigator {
     ///     them, then only siblings and ancestors' siblings are visited).
     /// - Returns: the next folder that has images, nil at the end.
     static func step(from current: URL, roots: [URL], forward: Bool, descend: Bool) -> URL? {
-        var walker = Walker(roots: roots, descend: descend)
-        var node = current
+        // Listings report real paths, so the starting points must be real too.
+        var walker = Walker(roots: roots.map(\.canonicalPath), descend: descend)
+        var node = current.canonicalPath
         // Bounded so a pathological tree can't stall the search.
         for _ in 0..<5000 {
             if Task.isCancelled { return nil }
@@ -92,6 +93,17 @@ nonisolated enum FolderNavigator {
             }
             return node
         }
+    }
+}
+
+nonisolated extension URL {
+    /// The path with symlinks resolved the way directory listings report it
+    /// (/var/… comes back as /private/var/…), so paths from both compare equal.
+    /// `resolvingSymlinksInPath()` does the opposite for /private and can't be used.
+    var canonicalPath: URL {
+        guard let real = realpath(path, nil) else { return self }
+        defer { free(real) }
+        return URL(fileURLWithPath: String(cString: real), isDirectory: hasDirectoryPath)
     }
 }
 

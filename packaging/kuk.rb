@@ -19,6 +19,11 @@ cask "kuk" do
   end
 
   zap trash: [
+    "~/Library/Application Support/Kuk",
+    "~/Library/Caches/Kuk",
+    "~/Library/Caches/msvarc.KukImg",
     "~/Library/Containers/msvarc.KukImg",
+    "~/Library/HTTPStorages/msvarc.KukImg",
+    "~/Library/Preferences/msvarc.KukImg.plist",
   ]
 end

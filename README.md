@@ -40,7 +40,7 @@ Designed for flipping through large folders of photos with zero friction — thu
 - **Folder tree** — sidebar shows each open folder as a lazily loaded tree of its subfolders with per-folder image counts (optionally including all subfolders); multiple folders can be open at once (Add Folder… button, multi-select in the open panel) and closed individually
 - **Folder navigation** — jump to the next or previous folder that contains images (⌥⌘↓ / ⌥⌘↑) and to the enclosing folder (⌘↑) straight from the keyboard, also in fullscreen; the sidebar follows along; optionally, subfolders and a “..” tile show up as tiles at the top of the grid and open with a double-click or Return
 - **Settings** (⌘,) — startup, browsing (filenames, subfolders, folders in the grid), sidebar (hide empty folders, count images in subfolders too), content search, viewer and slideshow options, plus app info and update check
-- **Recent folders** — sidebar and File → Open Recent, restored across launches via security-scoped bookmarks (the app is sandboxed); individual entries removable from the sidebar
+- **Recent folders** — sidebar and File → Open Recent, restored across launches via bookmarks that follow moved or renamed folders; individual entries removable from the sidebar
 - **Localized** — English and Czech
 - **Automatic updates** — new versions are offered and installed in-app via [Sparkle](https://sparkle-project.org)
 

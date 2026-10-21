@@ -345,7 +345,10 @@ struct ContentIndexTests {
         }
         let index = ContentIndex(storeURL: tree.root.appendingPathComponent("index.json"))
         await index.enqueue(items)
-        for _ in 0..<600 where !(await index.isIdle) {
+        // Usually well under a second, but the first Vision use after a fresh
+        // build can take half a minute on a busy machine; only a real hang
+        // should fail this.
+        for _ in 0..<2400 where !(await index.isIdle) {
             try await Task.sleep(for: .milliseconds(50))
         }
         #expect(await index.isIdle)
@@ -617,5 +620,58 @@ struct FolderWatcherTests {
     @Test func droppedEventsAlwaysRescan() {
         let dropped = event("/r/sub", kFSEventStreamEventFlagMustScanSubDirs)
         #expect(FolderWatcher.isRelevant(dropped, root: "/r", recursive: false))
+    }
+}
+
+// MARK: - Leaving the sandbox
+
+struct SandboxMigrationTests {
+    @Test func testHostIsDetected() {
+        // The host app then skips indexing and restoring folders.
+        #expect(AppEnvironment.isRunningTests)
+    }
+
+    @Test func movesTheIndexAndRewritesPhotosPaths() throws {
+        let tree = try TempTree()
+        let oldCache = tree.root.appendingPathComponent("old/Caches/Kuk/Photos", isDirectory: true)
+        let newCache = tree.root.appendingPathComponent("new/Caches/Kuk/Photos", isDirectory: true)
+        let fileKey = "/Users/someone/Pictures/a.jpg"
+        let source = try tree.file("old/ContentIndex.json")
+        try JSONEncoder().encode([oldCache.path + "/ABC-1/IMG_1.heic": 1, fileKey: 2]).write(to: source)
+        let destination = tree.root.appendingPathComponent("new/Kuk/ContentIndex.json")
+
+        SandboxMigration.migrateContentIndex(
+            from: source, to: destination, oldPhotosCache: oldCache, newPhotosCache: newCache
+        )
+
+        let moved = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: destination))
+        #expect(moved == [newCache.path + "/ABC-1/IMG_1.heic": 1, fileKey: 2])
+    }
+
+    @Test func keepsAnExistingIndex() throws {
+        let tree = try TempTree()
+        let source = try tree.file("old.json")
+        try JSONEncoder().encode(["old": 1]).write(to: source)
+        let destination = try tree.file("new.json")
+        try JSONEncoder().encode(["new": 2]).write(to: destination)
+
+        SandboxMigration.migrateContentIndex(
+            from: source, to: destination, oldPhotosCache: tree.root, newPhotosCache: tree.root
+        )
+
+        let kept = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: destination))
+        #expect(kept == ["new": 2])
+    }
+}
+
+struct RecentFoldersTests {
+    @Test func fallsBackToThePathWhenTheBookmarkFails() throws {
+        let tree = try TempTree()
+        let folder = try tree.folder("Trip")
+        let recent = RecentFolder(bookmark: Data([1, 2, 3]), path: folder.path, name: "Trip", lastOpened: .now)
+        #expect(RecentFolders.resolve(recent)?.path == folder.path)
+
+        let gone = tree.root.appendingPathComponent("Gone").path
+        #expect(RecentFolders.resolve(RecentFolder(bookmark: Data(), path: gone, name: "Gone", lastOpened: .now)) == nil)
     }
 }

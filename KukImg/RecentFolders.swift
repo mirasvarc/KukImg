@@ -21,11 +21,9 @@ nonisolated enum RecentFolders {
 
     @discardableResult
     static func add(_ url: URL) -> [RecentFolder] {
-        guard let bookmark = try? url.bookmarkData(
-            options: [.withSecurityScope],
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        ) else { return all() }
+        // A plain bookmark still follows the folder when it is moved or renamed.
+        let bookmark = (try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil))
+            ?? Data()
         var list = all().filter { $0.path != url.path }
         list.insert(
             RecentFolder(
@@ -56,13 +54,21 @@ nonisolated enum RecentFolders {
         UserDefaults.standard.removeObject(forKey: key)
     }
 
+    /// Follows the bookmark (security-scoped ones from the sandboxed versions
+    /// resolve too), falling back to the stored path.
     static func resolve(_ recent: RecentFolder) -> URL? {
         var stale = false
-        return try? URL(
+        if let url = try? URL(
             resolvingBookmarkData: recent.bookmark,
-            options: [.withSecurityScope],
+            options: [.withoutUI],
             relativeTo: nil,
             bookmarkDataIsStale: &stale
-        )
+        ) {
+            return url
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: recent.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return URL(fileURLWithPath: recent.path, isDirectory: true)
     }
 }
