@@ -6,6 +6,14 @@
         <description>Most recent updates to Kuk</description>
         <language>en</language>
         <item>
+            <title>Version 1.8.0</title>
+            <pubDate>Wed, 21 Oct 2026 17:43:04 +0200</pubDate>
+            <sparkle:version>1.8.0</sparkle:version>
+            <sparkle:shortVersionString>1.8.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/mirasvarc/KukImg/releases/download/v1.8.0/Kuk-v1.8.0.zip" sparkle:edSignature="FuiaU9GqvMfkFz2Y8iEzKxrQIm++fTlqj0/9FbfdL5sqssypRX8Glguj+00WrGTw7sUfLYzCAJpCbQYQc4MjDA==" length="2575237" type="application/octet-stream"/>
+        </item>
+        <item>
             <title>Version 1.7.0</title>
             <pubDate>Tue, 29 Sep 2026 17:11:06 +0200</pubDate>
             <sparkle:version>1.7.0</sparkle:version>
