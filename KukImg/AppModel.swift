@@ -129,7 +129,7 @@ final class AppModel {
     private(set) var photoAlbum: PhotoAlbum?
     /// Root folders shown as trees in the sidebar.
     private(set) var openFolders: [URL] = []
-    var items: [ImageItem] = [] { didSet { updateVisibleItems() } }
+    var items: [ImageItem] = [] { didSet { flagSummary = nil; updateVisibleItems() } }
     private(set) var visibleItems: [ImageItem] = []
     /// Non-empty only while the grid is split into per-folder sections.
     private(set) var groups: [ImageGroup] = []
@@ -196,7 +196,7 @@ final class AppModel {
     /// Non-nil while the rename sheet should be up.
     var renameRequest: RenameRequest?
     /// Culling flags by item URL, mirrored from Finder tags / the asset store.
-    private(set) var flags: [URL: ImageFlag] = [:]
+    private(set) var flags: [URL: ImageFlag] = [:] { didSet { flagSummary = nil } }
     var flagFilter: FlagFilter = .all { didSet { updateVisibleItems() } }
     private(set) var zoomRequest: ZoomRequest?
     /// Sidebar folders that are expanded, by path. Lives here (not in the
@@ -216,6 +216,8 @@ final class AppModel {
     /// Displayed items whose content matches the search ("This Folder").
     @ObservationIgnored private var contentMatches: Set<URL>?
     @ObservationIgnored private var searchTask: Task<Void, Never>?
+    /// Whether `items` carry picks / rejects; nil once items or flags change.
+    @ObservationIgnored private var flagSummary: (picked: Bool, rejected: Bool)?
 
     private var zoomRequestCount = 0
     private let prefetcher = Prefetcher()
@@ -1290,8 +1292,29 @@ final class AppModel {
 
     func flag(for item: ImageItem) -> ImageFlag? { flags[item.url] }
 
-    var hasPickedInCurrent: Bool { items.contains { flags[$0.url] == .pick } }
-    var hasRejectedInCurrent: Bool { items.contains { flags[$0.url] == .reject } }
+    var hasPickedInCurrent: Bool { currentFlagSummary.picked }
+    var hasRejectedInCurrent: Bool { currentFlagSummary.rejected }
+
+    /// The menu bar asks on every selection change, so the scan over all items
+    /// is cached until the items or the flags change.
+    private var currentFlagSummary: (picked: Bool, rejected: Bool) {
+        // Reading both registers the observation dependencies the cache can't.
+        let items = self.items
+        let flags = self.flags
+        if let flagSummary { return flagSummary }
+        var picked = false
+        var rejected = false
+        for item in items {
+            switch flags[item.url] {
+            case .pick:   picked = true
+            case .reject: rejected = true
+            case nil:     break
+            }
+            if picked && rejected { break }
+        }
+        flagSummary = (picked, rejected)
+        return (picked, rejected)
+    }
 
     /// Sets (nil clears) a flag; setting the flag every target already has
     /// toggles it off, so `P` `P` un-picks. Persisted as Finder tags on files

@@ -6,6 +6,10 @@ import AppKit
 /// directory when something genuinely needs a file (full view, share, convert,
 /// copy, metadata).
 nonisolated enum ImageLoading {
+    /// How long the selection has to stay on a photo before the views read
+    /// its file: a held arrow key skims past photos without any disk work.
+    static let settleDelay = Duration.milliseconds(120)
+
     /// Grid-style thumbnail; `pointSize` is quantized into cache buckets.
     static func thumbnail(for item: ImageItem, pointSize: CGFloat, scale: CGFloat) async -> NSImage? {
         await ThumbnailCache.shared.thumbnail(for: item, pointSize: pointSize, scale: scale)
@@ -68,6 +72,11 @@ nonisolated enum ImageLoading {
             }
             return await PhotosMetadata.metadata(for: id, fileSize: item.fileSize)
         }
+    }
+
+    /// Metadata that is already in memory, without any disk or PhotoKit work.
+    static func cachedMetadata(for item: ImageItem) async -> ImageMetadata? {
+        await MetadataCache.shared.cached(for: item.url, modifiedAt: item.modifiedAt)
     }
 
     /// A URL that really exists on disk, materializing a Photos asset first.

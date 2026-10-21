@@ -185,18 +185,23 @@ struct PhotoCanvas: View {
             guard !Task.isCancelled else { return }
             preview = thumb
         }
-        if pixelSize == nil, let meta = await ImageLoading.metadata(for: target),
-           let w = meta.pixelWidth, let h = meta.pixelHeight {
+        // Dimensions only from memory for now; the file is read after the
+        // debounce, so skimming past photos doesn't touch the disk.
+        if pixelSize == nil, let meta = await ImageLoading.cachedMetadata(for: target) {
             guard !Task.isCancelled else { return }
-            pixelSize = CGSize(width: w, height: h)
+            setPixelSize(from: meta)
         }
         guard cap > 0 else { return }
 
         let needsDecode = !isResolved(cap)
         if needsDecode {
             // 3. Debounce, then decode at viewport size.
-            try? await Task.sleep(for: .milliseconds(120))
+            try? await Task.sleep(for: ImageLoading.settleDelay)
             guard !Task.isCancelled else { return }
+        }
+        if pixelSize == nil, let meta = await ImageLoading.metadata(for: target) {
+            guard !Task.isCancelled else { return }
+            setPixelSize(from: meta)
         }
         // Checked even when a decode came from the cache: the neighbour
         // prefetch decodes an animation's first frame like any still image.
@@ -219,6 +224,11 @@ struct PhotoCanvas: View {
         await prefetchNeighbours(of: target, cap: cap)
     }
 
+    private func setPixelSize(from meta: ImageMetadata) {
+        guard let w = meta.pixelWidth, let h = meta.pixelHeight else { return }
+        pixelSize = CGSize(width: w, height: h)
+    }
+
     private func show(_ image: NSImage, cap: Int) {
         fullImage = image
         let longest = image.pixelLongestSide
@@ -233,8 +243,8 @@ struct PhotoCanvas: View {
         fullImage != nil && decodedLongest >= CGFloat(cap) - 1
     }
 
-    /// Warms the neighbours at the same size so the next arrow press is
-    /// instant, forward first since browsing mostly moves ahead.
+    /// Warms the neighbours at the same size, metadata included, so the next
+    /// arrow press is instant, forward first since browsing mostly moves ahead.
     private func prefetchNeighbours(of target: ImageItem, cap: Int) async {
         guard let idx = model.index(of: target.id) else { return }
         let items = model.visibleItems
@@ -243,6 +253,7 @@ struct PhotoCanvas: View {
             let neighbour = idx + offset
             guard items.indices.contains(neighbour) else { continue }
             _ = await ImageLoading.displayImage(for: items[neighbour], cap: cap)
+            _ = await ImageLoading.metadata(for: items[neighbour])
         }
     }
 

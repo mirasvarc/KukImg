@@ -18,6 +18,8 @@ struct FullscreenView: View {
     @State private var slideshowTask: Task<Void, Never>?
     /// Local monitor for trackpad swipes and mouse back/forward buttons.
     @State private var eventMonitor: Any?
+    /// Last filmstrip scroll; rapid steps (a held arrow key) skip the animation.
+    @State private var lastFilmstripScroll = Date.distantPast
     @FocusState private var focused: Bool
     @AppStorage("slideshowInterval") private var interval: Double = 4.0
     @AppStorage("slideshowLoop") private var loops = false
@@ -183,7 +185,15 @@ struct FullscreenView: View {
             .glassEffect(.regular, in: .rect(cornerRadius: 14))
             .onChange(of: model.selection) { _, id in
                 guard let id else { return }
-                withAnimation(.easeInOut(duration: 0.15)) {
+                // Animations queued by a held arrow key pile up and stutter.
+                let now = Date()
+                let animate = now.timeIntervalSince(lastFilmstripScroll) > 0.25
+                lastFilmstripScroll = now
+                if animate {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                } else {
                     proxy.scrollTo(id, anchor: .center)
                 }
             }

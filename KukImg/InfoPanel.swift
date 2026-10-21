@@ -95,12 +95,22 @@ struct InfoPanel: View {
         .frame(width: 240)
         .background(.regularMaterial)
         .task(id: item) {
-            meta = nil
+            let cached = await ImageLoading.cachedMetadata(for: item)
+            meta = cached
             histogram = nil
             allSections = []
-            // Never materializes a Photos asset — PhotoKit answers dimensions,
-            // date and GPS directly; full EXIF appears once a file exists.
-            self.meta = await ImageLoading.metadata(for: item)
+            // Skimming with a held arrow key reads nothing; the panel fills
+            // in once the selection settles.
+            try? await Task.sleep(for: ImageLoading.settleDelay)
+            guard !Task.isCancelled else { return }
+            if cached == nil {
+                // Never materializes a Photos asset — PhotoKit answers
+                // dimensions, date and GPS directly; full EXIF appears once a
+                // file exists.
+                let loaded = await ImageLoading.metadata(for: item)
+                guard !Task.isCancelled else { return }
+                meta = loaded
+            }
             // Any thumbnail already in memory is plenty for a 96×96 resample.
             var thumb = await ImageLoading.cachedThumbnail(for: item, scale: scale)
             if thumb == nil {

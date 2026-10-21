@@ -129,6 +129,18 @@ struct GridSelectionTests {
         #expect(model.selectedIDs.count == 3)
     }
 
+    @Test func flagSummaryFollowsFlagsAndItems() {
+        let model = model(with: ["a.jpg", "b.jpg"])
+        #expect(!model.hasPickedInCurrent)
+        model.setFlag(.pick, for: [model.visibleItems[0]])
+        #expect(model.hasPickedInCurrent)
+        #expect(!model.hasRejectedInCurrent)
+        model.setFlag(.reject, for: [model.visibleItems[1]])
+        #expect(model.hasRejectedInCurrent)
+        model.items = []
+        #expect(!model.hasPickedInCurrent)
+    }
+
     @Test func focusingAFolderClosesThePhoto() {
         let model = model(with: ["a.jpg"])
         model.selection = model.visibleItems[0].id

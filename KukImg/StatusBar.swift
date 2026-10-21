@@ -50,10 +50,20 @@ struct StatusBar: View {
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
         .task(id: item) {
+            guard let item else { meta = nil; return }
+            // Known metadata shows at once (no blank flash); otherwise the
+            // file is read only once the selection settles.
+            if let cached = await ImageLoading.cachedMetadata(for: item) {
+                meta = cached
+                return
+            }
             meta = nil
-            guard let item else { return }
+            try? await Task.sleep(for: ImageLoading.settleDelay)
+            guard !Task.isCancelled else { return }
             // Never materializes a Photos asset — PhotoKit answers directly.
-            self.meta = await ImageLoading.metadata(for: item)
+            let loaded = await ImageLoading.metadata(for: item)
+            guard !Task.isCancelled else { return }
+            meta = loaded
         }
     }
 }

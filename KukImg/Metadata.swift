@@ -34,7 +34,7 @@ actor MetadataCache {
     /// `modifiedAt` keys the entry, so metadata of an externally overwritten
     /// file is re-read after the next rescan instead of served stale.
     func metadata(for url: URL, modifiedAt: Date) async -> ImageMetadata {
-        let key = "\(url.path)|\(modifiedAt.timeIntervalSince1970)"
+        let key = Self.key(url, modifiedAt)
         if let cached = cache[key] { return cached }
         if let task = inFlight[key] { return await task.value }
         let task = Task.detached(priority: .userInitiated) {
@@ -46,6 +46,15 @@ actor MetadataCache {
         if cache.count > 10_000 { cache.removeAll() }
         cache[key] = meta
         return meta
+    }
+
+    /// Metadata already read, without touching the file.
+    func cached(for url: URL, modifiedAt: Date) -> ImageMetadata? {
+        cache[Self.key(url, modifiedAt)]
+    }
+
+    private static func key(_ url: URL, _ modifiedAt: Date) -> String {
+        "\(url.path)|\(modifiedAt.timeIntervalSince1970)"
     }
 }
 

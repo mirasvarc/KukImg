@@ -42,11 +42,10 @@ final class ContentSearchModel {
     init() {
         isEnabled = UserDefaults.standard.bool(forKey: "contentSearchEnabled")
         let index = index
-        Task {
-            await index.setStatusHandler { [weak self] status in
-                Task { @MainActor in self?.apply(status) }
-            }
+        let handler: @Sendable (ContentIndex.Status) -> Void = { [weak self] status in
+            Task { @MainActor in self?.apply(status) }
         }
+        Task { await index.setStatusHandler(handler) }
     }
 
     private func apply(_ status: ContentIndex.Status) {
